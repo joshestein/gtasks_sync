@@ -1,5 +1,6 @@
 """The Google Tasks API calls the service makes, on the default task list."""
 
+import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from urllib.parse import quote
@@ -8,6 +9,8 @@ import requests
 from google.auth import exceptions as auth_errors
 
 from gtasks_sync.errors import OpFailed
+
+log = logging.getLogger(__name__)
 
 # A Tasks API task resource, as JSON.
 Task = dict[str, Any]
