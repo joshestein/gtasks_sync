@@ -1,4 +1,4 @@
-"""The sync loop: apply ops, fetch, write the cache, remove op files."""
+"""The sync loop: take the Inbox, apply ops, fetch, write the cache, remove op files."""
 
 import faulthandler
 import logging
@@ -17,6 +17,7 @@ from watchdog.observers.api import BaseObserver
 from gtasks_sync.api import AuthError, Task, TasksApi, Transient
 from gtasks_sync.apply import apply_queue
 from gtasks_sync.cache import Status, SyncError, read_cache, serialize_tasks, write_cache
+from gtasks_sync.inbox import Inbox
 from gtasks_sync.queue import OP_FILE_RE, SYNC_NOW_FILE, Queue
 from gtasks_sync.state import State
 
@@ -71,6 +72,7 @@ class Syncer:
     open_api: Callable[[], SyncApi]
     state: State
     queue: Queue
+    inbox: Inbox
     cache_file: Path
     now: Callable[[], datetime] = _utc_now
     api: SyncApi | None = field(default=None, init=False)
@@ -84,6 +86,11 @@ class Syncer:
     def round(self) -> SyncError | None:
         """One round. Never raises: every error goes to the log and to cache.json."""
         attempt_at = self.now()
+        # Before the API: offline or signed out, a capture still reaches the queue, and the Mac shows it.
+        try:
+            self.inbox.ingest(self.queue.dir, attempt_at)
+        except Exception:
+            log.exception("inbox step failed")
         tasks: list[dict[str, Any]] | None = None
         error = None
         try:
