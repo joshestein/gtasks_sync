@@ -9,8 +9,9 @@ from gtasks_sync import launchd
 from gtasks_sync.api import ApiError
 from gtasks_sync.auth import authorize, open_api
 from gtasks_sync.cache import read_cache
+from gtasks_sync.inbox import Inbox
 from gtasks_sync.keychain import KeychainError, delete_secrets, read_secrets, save_secrets
-from gtasks_sync.paths import APP_DIR, CACHE_FILE, LAUNCHD_LOG_FILE, LOG_FILE, QUEUE_DIR, STATE_FILE
+from gtasks_sync.paths import APP_DIR, CACHE_FILE, INBOX_DIR, LAUNCHD_LOG_FILE, LOG_FILE, QUEUE_DIR, STATE_FILE
 from gtasks_sync.queue import Queue, list_op_files
 from gtasks_sync.state import load_state
 
@@ -48,6 +49,9 @@ def install(_: argparse.Namespace) -> None:
 
 def _install() -> None:
     """Load the agent, or reload it so new code takes effect."""
+    # Here, not only in run: a caller writes to the inbox as soon as APP_DIR exists (ADR 0004).
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
     launchd.install([str(Path(sys.prefix) / "bin" / "gtasks-sync"), "run"], LAUNCHD_LOG_FILE)
     print(f"Service installed ({launchd.PLIST_FILE}). Log: {LOG_FILE}")
 
@@ -62,10 +66,12 @@ def run(_: argparse.Namespace) -> None:
     from gtasks_sync.service import Syncer, Wake, run_forever, watch_queue
 
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
     syncer = Syncer(
         open_api=lambda: open_api(read_secrets()),
         state=load_state(STATE_FILE),
         queue=Queue(QUEUE_DIR),
+        inbox=Inbox(INBOX_DIR),
         cache_file=CACHE_FILE,
     )
     wake = Wake()
@@ -75,20 +81,23 @@ def run(_: argparse.Namespace) -> None:
 
 
 def status(_: argparse.Namespace) -> None:
-    print(f"agent:    {'loaded' if launchd.is_loaded() else 'not loaded'}")
+    print(f"agent:        {'loaded' if launchd.is_loaded() else 'not loaded'}")
     tasks, cache = read_cache(CACHE_FILE)
     if cache is None:
-        print("cache:    none")
+        print("cache:        none")
     else:
         error = cache.error
-        print(f"synced:   {cache.synced_at or 'never'}")
-        print(f"attempt:  {cache.last_attempt_at}")
-        print(f"error:    {f'{error.kind}: {error.message}' if error else 'none'}")
-        print(f"tasks:    {len(tasks)}")
+        print(f"synced:       {cache.synced_at or 'never'}")
+        print(f"attempt:      {cache.last_attempt_at}")
+        print(f"error:        {f'{error.kind}: {error.message}' if error else 'none'}")
+        print(f"tasks:        {len(tasks)}")
     queue = Queue(QUEUE_DIR)
-    print(f"queued:   {len(list_op_files(queue.dir))}")
-    print(f"accepted: {len(list_op_files(queue.accepted_dir))}")
-    print(f"failed:   {len(list_op_files(queue.failed_dir))}")
+    print(f"queued:       {len(list_op_files(queue.dir))}")
+    print(f"accepted:     {len(list_op_files(queue.accepted_dir))}")
+    print(f"failed:       {len(list_op_files(queue.failed_dir))}")
+    inbox = Inbox(INBOX_DIR)
+    print(f"inbox:        {len(inbox.files())}")
+    print(f"inbox failed: {len(inbox.failed())}")
 
 
 def uninstall(args: argparse.Namespace) -> None:
@@ -96,8 +105,8 @@ def uninstall(args: argparse.Namespace) -> None:
     print("Service removed.")
     if not args.purge:
         return
-    # Accepted ops already reached Google. Only ops still in the Queue would be lost.
-    queued = len(list_op_files(QUEUE_DIR))
+    # Accepted ops already reached Google. Only ops still in the Queue, and Inbox files, would be lost.
+    queued = len(list_op_files(QUEUE_DIR)) + len(Inbox(INBOX_DIR).files())
     if queued and input(f"{queued} ops have not reached Google and will be lost. Type 'yes' to continue: ") != "yes":
         sys.exit("Stopped. The Keychain item and data are kept.")
     delete_secrets()
