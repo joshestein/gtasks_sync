@@ -4,15 +4,11 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-  CachedTask,
-  changedFields,
   createTask,
   loadTasks,
   mintLocalId,
-  Op,
   OP_FILE,
   overlay,
-  QueuedOp,
   readOps,
   requestSync,
   setCompleted,
@@ -22,27 +18,11 @@ import {
   updateTask,
   writeOp,
 } from "../src/lib/store";
+import { AT, cached, staged, task } from "./fixtures";
 
-const cached = (id: string, fields: Partial<CachedTask> = {}): CachedTask => ({
-  id,
-  local_id: null,
-  parent: null,
-  position: "00000000000000000001",
-  title: id,
-  notes: "",
-  due: null,
-  status: "needsAction",
-  completed: null,
-  updated: "2026-11-01T00:00:00.000Z",
-  url: `https://tasks.google.com/task/${id}`,
-  ...fields,
-});
-
-const AT = Date.parse("2026-11-15T12:00:00.000Z");
-let counter = 0;
-const queued = (op: Op, at = AT): QueuedOp => ({ name: `${at}-${(counter++).toString(16)}.json`, at, op });
 const LOCAL = "local:1763208000000-3f9a0c1e";
 const byId = (tasks: Task[]) => Object.fromEntries(tasks.map((t) => [t.id, t]));
+const create = { op: "create", task: LOCAL, title: "milk", notes: "", due: null } as const;
 
 describe("mintLocalId", () => {
   it("matches the service's LOCAL_ID_RE", () => {
@@ -53,42 +33,47 @@ describe("mintLocalId", () => {
 
 describe("files", () => {
   let dir: string;
-  const queue = () => join(dir, "queue");
+  const queue = (...sub: string[]) => join(dir, "queue", ...sub);
+  const put = (sub: string, name: string, body: unknown) => {
+    mkdirSync(queue(sub), { recursive: true });
+    writeFileSync(join(queue(sub), name), typeof body === "string" ? body : JSON.stringify(body));
+  };
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "gtasks-"));
   });
 
-  it("writes one op per file with no temp file left", () => {
-    createTask("  milk  ", "oat", "2026-11-20", dir);
+  it("writes one op per file, title trimmed, with no temp file left", () => {
+    createTask({ title: "  milk  ", notes: "oat", due: "2026-11-20" }, dir);
     const [name, ...rest] = readdirSync(queue());
     expect(rest).toEqual([]);
     expect(name).toMatch(OP_FILE);
-    const op = JSON.parse(readFileSync(join(queue(), name), "utf8"));
+    const op = JSON.parse(readFileSync(queue(name), "utf8"));
     expect(op).toMatchObject({ op: "create", title: "milk", notes: "oat", due: "2026-11-20" });
     expect(op.task).toMatch(/^local:\d+-[0-9a-f]{8}$/);
   });
 
   it("never names an op before the newest pending op, also one already accepted", () => {
-    mkdirSync(join(queue(), "accepted"), { recursive: true });
-    writeFileSync(join(queue(), "accepted", "5000-aaaaaaaa.json"), JSON.stringify({ op: "delete", task: "t1" }));
+    put("accepted", "5000-aaaaaaaa.json", { op: "delete", task: "t1" });
     writeOp({ op: "delete", task: "t2" }, dir, 1000); // The clock stepped back.
     writeOp({ op: "delete", task: "t3" }, dir, 1000);
-    const names = readdirSync(queue())
+    const times = readdirSync(queue())
       .filter((n) => OP_FILE.test(n))
+      .map((n) => Number(n.split("-")[0]))
       .sort();
-    expect(names.map((n) => Number(n.split("-")[0]))).toEqual([5001, 5002]);
+    expect(times).toEqual([5001, 5002]);
   });
 
-  it("reads ops in name order and skips temp, unreadable, and other files", () => {
-    mkdirSync(queue());
-    writeFileSync(join(queue(), "2-bb.json"), JSON.stringify({ op: "delete", task: "b" }));
-    writeFileSync(join(queue(), "1-aa.json"), JSON.stringify({ op: "delete", task: "a" }));
-    writeFileSync(join(queue(), ".3-cc.json.tmp"), "{}");
-    writeFileSync(join(queue(), "4-dd.json"), "{");
-    writeFileSync(join(queue(), SYNC_NOW_FILE), "");
-    expect(readOps(queue()).map((q) => [q.at, q.op.task])).toEqual([
-      [1, "a"],
-      [2, "b"],
+  it("reads all three stages in name order and skips temp, unreadable, and other files", () => {
+    put("", "3-cc.json", { op: "delete", task: "c" });
+    put("accepted", "2-bb.json", { op: "delete", task: "b" });
+    put("failed", "1-aa.json", { op: "delete", task: "a" });
+    put("", ".4-dd.json.tmp", "{}");
+    put("", "5-ee.json", "{");
+    put("", SYNC_NOW_FILE, "");
+    expect(readOps(dir).map((s) => [s.at, s.op.task, s.state])).toEqual([
+      [1, "a", "failed"],
+      [2, "b", "pending"],
+      [3, "c", "pending"],
     ]);
     expect(readOps(join(dir, "missing"))).toEqual([]);
   });
@@ -98,22 +83,14 @@ describe("files", () => {
     expect(readdirSync(queue())).toEqual([SYNC_NOW_FILE]);
   });
 
-  it("loadTasks reads the cache and the queue, accepted, and failed ops", () => {
+  it("loadTasks reads the cache and every stage", () => {
     writeFileSync(
       join(dir, "cache.json"),
       JSON.stringify({ version: 1, synced_at: null, last_attempt_at: null, error: null, tasks: [cached("t1")] }),
     );
-    mkdirSync(join(queue(), "accepted"), { recursive: true });
-    mkdirSync(join(queue(), "failed"));
-    writeFileSync(
-      join(queue(), "accepted", "1-aa.json"),
-      JSON.stringify({ op: "update", task: "t1", fields: { title: "a" } }),
-    );
-    writeFileSync(join(queue(), "2-bb.json"), JSON.stringify({ op: "update", task: "t1", fields: { notes: "b" } }));
-    writeFileSync(
-      join(queue(), "failed", "0-cc.json"),
-      JSON.stringify({ op: "create", task: LOCAL, title: "x", notes: "", due: null }),
-    );
+    put("accepted", "1-aa.json", { op: "update", task: "t1", fields: { title: "a" } });
+    put("", "2-bb.json", { op: "update", task: "t1", fields: { notes: "b" } });
+    put("failed", "0-cc.json", create);
     const { tasks, status } = loadTasks(dir);
     expect(status?.error).toBeNull();
     const t = byId(tasks);
@@ -126,73 +103,48 @@ describe("files", () => {
     expect(loadTasks(dir)).toEqual({ tasks: [], status: null });
   });
 
-  it("updateTask writes only changed fields, and nothing when nothing changed", () => {
-    const task: Task = { ...cached("t1", { title: "milk", notes: "n", due: "2026-11-20" }), state: "synced" };
-    expect(updateTask(task, { title: " milk ", notes: "n", due: "2026-11-20" }, dir)).toBe(false);
-    expect(updateTask(task, { title: "milk", notes: "n", due: null }, dir)).toBe(true);
-    setCompleted(task, true, dir);
-    const ops = readOps(queue()).map((q) => q.op);
-    expect(ops).toEqual([
-      { op: "update", task: "t1", fields: { due: null } },
+  it("updateTask writes only changed fields, compares the trimmed title, and writes nothing when nothing changed", () => {
+    const milk = task("t1", { title: "milk", notes: "n", due: "2026-11-20" });
+    expect(updateTask(milk, { title: " milk ", notes: "n", due: "2026-11-20" }, dir)).toBe(false);
+    expect(updateTask(milk, { title: "oat milk ", notes: "n", due: null }, dir)).toBe(true);
+    setCompleted(milk, true, dir);
+    expect(readOps(dir).map((s) => s.op)).toEqual([
+      { op: "update", task: "t1", fields: { title: "oat milk", due: null } },
       { op: "complete", task: "t1" },
     ]);
   });
 });
 
-describe("changedFields", () => {
-  const task: Task = { ...cached("t1", { title: "milk", notes: "", due: null }), state: "synced" };
-  it("compares the trimmed title", () => {
-    expect(changedFields(task, { title: "oat milk ", notes: "", due: "2026-11-20" })).toEqual({
-      title: "oat milk",
-      due: "2026-11-20",
-    });
-  });
-});
-
 describe("overlay", () => {
   it("shows a capture at once, at the top of Google's order", () => {
-    const [task] = overlay([], [queued({ op: "create", task: LOCAL, title: "milk", notes: "", due: null })], []);
-    expect(task).toMatchObject({ id: LOCAL, local_id: LOCAL, title: "milk", position: "", state: "pending" });
+    const [shown] = overlay([], [staged(create)]);
+    expect(shown).toMatchObject({ id: LOCAL, local_id: LOCAL, title: "milk", position: "", state: "pending" });
   });
 
   it("does not show a capture twice once the cache has it", () => {
-    const tasks = overlay(
-      [cached("t1", { local_id: LOCAL })],
-      [queued({ op: "create", task: LOCAL, title: "milk", notes: "", due: null })],
-      [],
-    );
+    const tasks = overlay([cached("t1", { local_id: LOCAL })], [staged(create)]);
     expect(tasks.map((t) => t.id)).toEqual(["t1"]);
   });
 
-  it("matches ops by task id or local id", () => {
+  it("matches ops by task id or local id, and an update changes only its fields", () => {
     const tasks = overlay(
-      [cached("t1", { local_id: LOCAL })],
+      [cached("t1", { local_id: LOCAL, due: "2026-11-20" })],
       [
-        queued({ op: "update", task: LOCAL, fields: { title: "a" } }),
-        queued({ op: "update", task: "t1", fields: { notes: "b" } }),
+        staged({ op: "update", task: LOCAL, fields: { title: "a" } }),
+        staged({ op: "update", task: "t1", fields: { notes: "b" } }),
       ],
-      [],
     );
-    expect(tasks[0]).toMatchObject({ title: "a", notes: "b", state: "pending" });
-  });
-
-  it("an update changes only its fields", () => {
-    const [task] = overlay(
-      [cached("t1", { notes: "keep", due: "2026-11-20" })],
-      [queued({ op: "update", task: "t1", fields: { due: null } })],
-      [],
-    );
-    expect(task).toMatchObject({ notes: "keep", due: null });
+    expect(tasks[0]).toMatchObject({ title: "a", notes: "b", due: "2026-11-20", state: "pending" });
   });
 
   it("complete also completes the subtasks; uncomplete reopens only the task", () => {
     const tasks = [cached("p"), cached("c", { parent: "p" }), cached("other")];
-    const done = byId(overlay(tasks, [queued({ op: "complete", task: "p" })], []));
+    const done = byId(overlay(tasks, [staged({ op: "complete", task: "p" })]));
     expect([done.p.status, done.c.status, done.other.status]).toEqual(["completed", "completed", "needsAction"]);
     expect(done.p.completed).toBe(new Date(AT).toISOString());
 
     const reopened = byId(
-      overlay(tasks, [queued({ op: "complete", task: "p" }), queued({ op: "uncomplete", task: "p" })], []),
+      overlay(tasks, [staged({ op: "complete", task: "p" }), staged({ op: "uncomplete", task: "p" })]),
     );
     expect([reopened.p.status, reopened.p.completed, reopened.c.status]).toEqual(["needsAction", null, "completed"]);
   });
@@ -200,34 +152,32 @@ describe("overlay", () => {
   it("delete hides the task and its subtasks", () => {
     const tasks = overlay(
       [cached("p"), cached("c", { parent: "p" }), cached("other")],
-      [queued({ op: "delete", task: "p" })],
-      [],
+      [staged({ op: "delete", task: "p" })],
     );
     expect(tasks.map((t) => t.id)).toEqual(["other"]);
   });
 
   it("ignores ops on a task that is not there", () => {
-    expect(overlay([], [queued({ op: "complete", task: "gone" })], [])).toEqual([]);
+    expect(overlay([], [staged({ op: "complete", task: "gone" })])).toEqual([]);
   });
 
-  it("shows a failed capture and lets a later delete dismiss it", () => {
-    const create = queued({ op: "create", task: LOCAL, title: "milk", notes: "", due: null });
-    expect(overlay([], [], [create])[0].state).toBe("failed");
-    expect(overlay([], [queued({ op: "delete", task: LOCAL })], [create])).toEqual([]);
+  it("shows a failed capture, and a later delete dismisses it", () => {
+    const failed = staged(create, "failed");
+    expect(overlay([], [failed])[0].state).toBe("failed");
+    expect(overlay([], [failed, staged({ op: "delete", task: LOCAL })])).toEqual([]);
   });
 
-  it("shows a failed edit's content, but only while the cache is not newer", () => {
-    const edit = queued({ op: "update", task: "t1", fields: { title: "x" } }, Date.parse("2026-11-10T00:00:00.000Z"));
-    expect(overlay([cached("t1")], [], [edit])[0]).toMatchObject({ title: "x", state: "failed" });
-    expect(overlay([cached("t1", { updated: "2026-11-12T00:00:00.000Z" })], [], [edit])[0]).toMatchObject({
-      title: "t1",
-      state: "synced",
+  it("shows a failed edit's content; a failed complete or delete only marks the task", () => {
+    expect(
+      overlay([cached("t1")], [staged({ op: "update", task: "t1", fields: { title: "x" } }, "failed")])[0],
+    ).toMatchObject({
+      title: "x",
+      state: "failed",
     });
-  });
-
-  it("a failed complete or delete only marks the task", () => {
-    const [task] = overlay([cached("t1")], [], [queued({ op: "delete", task: "t1" })]);
-    expect(task).toMatchObject({ id: "t1", status: "needsAction", state: "failed" });
+    expect(overlay([cached("t1")], [staged({ op: "delete", task: "t1" }, "failed")])[0]).toMatchObject({
+      status: "needsAction",
+      state: "failed",
+    });
   });
 });
 

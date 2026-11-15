@@ -8,9 +8,9 @@ export default function Command() {
     <TaskForm
       submitTitle="Save Task"
       enableDrafts
-      onSubmit={async ({ title, due, notes }) => {
+      onSubmit={async (values) => {
         // Only a local file write: the service syncs it in the background.
-        createTask(title, notes, due);
+        createTask(values);
         await showHUD("Task saved", { clearRootSearch: true });
         await popToRoot();
       }}

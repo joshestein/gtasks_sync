@@ -12,16 +12,19 @@ import {
   Toast,
   useNavigation,
 } from "@raycast/api";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { arrange, isOverdue, localDate, Row } from "./lib/list";
+import { formatDue, formatTime, isOverdue, toDue } from "./lib/dates";
+import { arrange, Row } from "./lib/list";
 import { escapeMarkdown, renderTask } from "./lib/markdown";
 import {
   createTask,
   deleteTask,
   loadTasks,
+  LOG_FILE,
   requestSync,
   setCompleted,
+  subtasks,
   syncWarning,
   Task,
   updateTask,
@@ -39,22 +42,36 @@ export default function Command() {
   const [{ tasks, warning }, setData] = useState(load);
   const [query, setQuery] = useState("");
   const [showDetail, setShowDetail] = useState(false);
-  // Keep the old state when nothing changed, so the list does not jump.
-  const reload = useCallback(
-    () =>
-      setData((prev) => {
-        const next = load();
-        return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
-      }),
-    [],
-  );
+  // Set new state only when something changed, so the list does not jump.
+  const lastJson = useRef("");
+  const reload = useCallback(() => {
+    const next = load();
+    const json = JSON.stringify(next);
+    if (json !== lastJson.current) {
+      lastJson.current = json;
+      setData(next);
+    }
+  }, []);
   // The service changes the files in the background: poll so pending states and the sync warning stay current.
   useEffect(() => {
     const timer = setInterval(reload, RELOAD_MS);
     return () => clearInterval(timer);
   }, [reload]);
   const { open, completed } = useMemo(() => arrange(tasks, query), [tasks, query]);
-  const shared = { tasks, query, reload, showDetail, toggleDetail: () => setShowDetail((s) => !s) };
+  const today = toDue(new Date());
+  const newTask = <NewTaskAction title={query.trim()} reload={reload} />;
+  const item = (row: Row) => (
+    <TaskItem
+      key={row.task.id}
+      row={row}
+      subtaskCount={subtasks(tasks, row.task).length}
+      today={today}
+      reload={reload}
+      newTask={newTask}
+      showDetail={showDetail}
+      toggleDetail={() => setShowDetail((s) => !s)}
+    />
+  );
 
   return (
     <List
@@ -70,13 +87,13 @@ export default function Command() {
             title={warning}
             detail={
               <List.Item.Detail
-                markdown={`${escapeMarkdown(warning)}\n\nRun \`gtasks-sync status\` or check \`~/Library/Logs/gtasks-sync.log\`.`}
+                markdown={`${escapeMarkdown(warning)}\n\nRun \`gtasks-sync status\` or check \`${LOG_FILE}\`.`}
               />
             }
             actions={
               <ActionPanel>
                 <SyncNowAction />
-                <NewTaskAction query={query} reload={reload} />
+                {newTask}
               </ActionPanel>
             }
           />
@@ -85,36 +102,34 @@ export default function Command() {
       <List.EmptyView
         title="No tasks"
         description={query ? "Press Return to make a task from your search." : undefined}
-        actions={
-          <ActionPanel>
-            <NewTaskAction query={query} reload={reload} />
-          </ActionPanel>
-        }
+        actions={<ActionPanel>{newTask}</ActionPanel>}
       />
-      <List.Section title="Open" subtitle={String(open.length)}>
-        {open.map((row) => (
-          <TaskItem key={row.task.id} row={row} {...shared} />
-        ))}
-      </List.Section>
-      <List.Section title="Completed" subtitle={String(completed.length)}>
-        {completed.map((row) => (
-          <TaskItem key={row.task.id} row={row} {...shared} />
-        ))}
-      </List.Section>
+      {(
+        [
+          ["Open", open],
+          ["Completed", completed],
+        ] as const
+      ).map(([title, rows]) => (
+        <List.Section key={title} title={title} subtitle={String(rows.length)}>
+          {rows.map(item)}
+        </List.Section>
+      ))}
     </List>
   );
 }
 
 interface ItemProps {
   row: Row;
-  tasks: Task[];
-  query: string;
+  subtaskCount: number;
+  today: string;
   reload: () => void;
+  newTask: ReactElement;
   showDetail: boolean;
   toggleDetail: () => void;
 }
 
-function TaskItem({ row: { task, parentTitle }, tasks, query, reload, showDetail, toggleDetail }: ItemProps) {
+function TaskItem({ row, subtaskCount, today, reload, newTask, showDetail, toggleDetail }: ItemProps) {
+  const { task, parentTitle, nested } = row;
   const done = task.status === "completed";
 
   async function toggleCompleted() {
@@ -124,10 +139,9 @@ function TaskItem({ row: { task, parentTitle }, tasks, query, reload, showDetail
   }
 
   async function remove() {
-    const subtasks = tasks.filter((t) => t.parent === task.id).length;
     const confirmed = await confirmAlert({
       title: "Delete task?",
-      message: subtasks ? `This also deletes ${subtasks} subtask${subtasks === 1 ? "" : "s"}.` : undefined,
+      message: subtaskCount ? `This also deletes ${subtaskCount} subtask${subtaskCount === 1 ? "" : "s"}.` : undefined,
       primaryAction: { title: "Delete", style: Alert.ActionStyle.Destructive },
     });
     if (!confirmed) return;
@@ -137,16 +151,19 @@ function TaskItem({ row: { task, parentTitle }, tasks, query, reload, showDetail
 
   return (
     <List.Item
-      title={parentTitle ? `↳ ${task.title}` : task.title}
-      // Under its parent the parent title adds nothing. In a search, the subtask shows alone.
-      subtitle={parentTitle && query ? parentTitle : undefined}
+      title={nested ? `↳ ${task.title}` : task.title}
+      // Under its parent the parent title adds nothing.
+      subtitle={nested ? undefined : parentTitle}
       icon={rowIcon(task)}
-      accessories={accessories(task)}
+      accessories={accessories(task, today)}
+      // Built only while the pane shows: it is the costliest part of a row.
       detail={
-        <List.Item.Detail
-          markdown={renderTask(task)}
-          metadata={<TaskMetadata task={task} parentTitle={parentTitle} />}
-        />
+        showDetail ? (
+          <List.Item.Detail
+            markdown={renderTask(task)}
+            metadata={<TaskMetadata task={task} parentTitle={parentTitle} today={today} />}
+          />
+        ) : undefined
       }
       actions={
         <ActionPanel>
@@ -162,7 +179,7 @@ function TaskItem({ row: { task, parentTitle }, tasks, query, reload, showDetail
             target={<TaskEditor task={task} onSaved={reload} />}
           />
           <Action.CopyToClipboard title="Copy Title" content={task.title} shortcut={Keyboard.Shortcut.Common.Copy} />
-          <NewTaskAction query={query} reload={reload} />
+          {newTask}
           {task.url && (
             <Action.OpenInBrowser
               title="Open in Google Tasks"
@@ -211,14 +228,14 @@ function SyncNowAction() {
   );
 }
 
-/** The search text becomes the title of the new task. */
-function NewTaskAction({ query, reload }: { query: string; reload: () => void }) {
+/** `title`, usually the search text, becomes the title of the new task. */
+function NewTaskAction({ title, reload }: { title: string; reload: () => void }) {
   return (
     <Action.Push
       title="New Task"
       icon={Icon.Plus}
       shortcut={Keyboard.Shortcut.Common.New}
-      target={<TaskEditor initialTitle={query.trim()} onSaved={reload} />}
+      target={<TaskEditor initialTitle={title} onSaved={reload} />}
     />
   );
 }
@@ -229,32 +246,32 @@ function TaskEditor({ task, initialTitle = "", onSaved }: { task?: Task; initial
   return (
     <TaskForm
       submitTitle={task ? "Save Changes" : "Save Task"}
-      initial={
-        task ? { title: task.title, due: task.due, notes: task.notes } : { title: initialTitle, due: null, notes: "" }
-      }
+      initial={task ?? { title: initialTitle, due: null, notes: "" }}
       onSubmit={async (values) => {
-        const changed = task ? updateTask(task, values) : (createTask(values.title, values.notes, values.due), true);
+        let changed = true;
+        if (task) changed = updateTask(task, values);
+        else createTask(values);
         onSaved();
         pop();
-        await showToast({
-          style: Toast.Style.Success,
-          title: changed ? "Saved" : "No changes",
-          message: changed ? "Syncs in the background" : undefined,
-        });
+        await showToast(
+          changed
+            ? { style: Toast.Style.Success, title: "Saved", message: "Syncs in the background" }
+            : { style: Toast.Style.Success, title: "No changes" },
+        );
       }}
     />
   );
 }
 
-function TaskMetadata({ task, parentTitle }: { task: Task; parentTitle?: string }) {
+function TaskMetadata({ task, parentTitle, today }: { task: Task; parentTitle?: string; today: string }) {
   const { Metadata } = List.Item.Detail;
   return (
     <Metadata>
       <Metadata.Label title="Sync" text={STATE_LABEL[task.state]} />
-      {task.due && <Metadata.Label title="Due" text={formatDue(task.due)} />}
-      {task.completed && <Metadata.Label title="Completed" text={new Date(task.completed).toLocaleString()} />}
+      {task.due && <Metadata.Label title="Due" text={formatDue(task.due, today)} />}
+      {task.completed && <Metadata.Label title="Completed" text={formatTime(task.completed)} />}
       {parentTitle && <Metadata.Label title="Subtask of" text={parentTitle} />}
-      {task.updated && <Metadata.Label title="Updated" text={new Date(task.updated).toLocaleString()} />}
+      {task.updated && <Metadata.Label title="Updated" text={formatTime(task.updated)} />}
     </Metadata>
   );
 }
@@ -262,7 +279,7 @@ function TaskMetadata({ task, parentTitle }: { task: Task; parentTitle?: string 
 const STATE_LABEL: Record<Task["state"], string> = {
   synced: "Synced",
   pending: "Pending sync",
-  failed: "Failed: see ~/Library/Logs/gtasks-sync.log",
+  failed: `Failed: see ${LOG_FILE}`,
 };
 
 function rowIcon(task: Task): Image.ImageLike {
@@ -271,10 +288,10 @@ function rowIcon(task: Task): Image.ImageLike {
     : { source: Icon.Circle, tintColor: Color.SecondaryText };
 }
 
-function accessories(task: Task): List.Item.Accessory[] {
+function accessories(task: Task, today: string): List.Item.Accessory[] {
   const list: List.Item.Accessory[] = [];
   if (task.due) {
-    list.push({ tag: { value: formatDue(task.due), color: isOverdue(task) ? Color.Red : undefined } });
+    list.push({ tag: { value: formatDue(task.due, today), color: isOverdue(task, today) ? Color.Red : undefined } });
   }
   if (task.state === "failed") {
     list.push({ icon: { source: Icon.ExclamationMark, tintColor: Color.Red }, tooltip: STATE_LABEL.failed });
@@ -282,15 +299,4 @@ function accessories(task: Task): List.Item.Accessory[] {
     list.push({ icon: { source: Icon.Clock, tintColor: Color.SecondaryText }, tooltip: STATE_LABEL.pending });
   }
   return list;
-}
-
-/** "Today", "Tomorrow", "Yesterday", or a short date such as "Fri 20 Nov". */
-function formatDue(due: string): string {
-  const [y, m, d] = due.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const offset = (days: number) => localDate(new Date(Date.now() + days * 86_400_000));
-  if (due === offset(0)) return "Today";
-  if (due === offset(1)) return "Tomorrow";
-  if (due === offset(-1)) return "Yesterday";
-  return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 }
