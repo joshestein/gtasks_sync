@@ -2,11 +2,10 @@
 
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from gtasks_sync.api import Task, TasksApi, insert_body, patch_body, task_fields
 from gtasks_sync.errors import OpFailed
-from gtasks_sync.queue import InvalidOp, Op, failed_dir, list_op_files, move_to_failed, parse_op
+from gtasks_sync.queue import Op, Queue
 from gtasks_sync.state import State
 
 log = logging.getLogger(__name__)
@@ -45,12 +44,14 @@ def _create(api: TasksApi, state: State, op: Op, now: datetime) -> None:
         ]
         # Two or more: a wrong adopt loses the capture, a duplicate does not. So insert.
         if len(candidates) == 1:
-            state.map(local_id, candidates[0]["id"], now)
+            state.map(local_id, candidates[0]["id"])
+            state.save()
             log.warning("adopted task %s for %s after a lost insert", candidates[0]["id"], local_id)
             return
 
     created = api.insert(insert_body(op.fields))
-    state.map(local_id, created["id"], now)
+    state.map(local_id, created["id"])
+    state.save()
 
 
 def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
@@ -78,42 +79,19 @@ def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
             api.delete(task_id)
 
 
-def done_files(queue_dir: Path, state: State) -> list[Path]:
-    """Files to remove after the cache is written: applied ops, and failed ops older than an applied op
-    for the same task. Without the second part, a failed op stays in the overlay for good."""
-    applied = [p for p in list_op_files(queue_dir) if p.name in state.applied]
-    # Files are in name order, so the last one per task is the newest.
-    newest = {state.applied[p.name]: p.name for p in applied}
-    if not newest:
-        return applied  # Fast path: skip reading failed/.
+def apply_queue(api: TasksApi, state: State, queue: Queue, now: datetime) -> None:
+    """Apply the ops in the Queue, in order. Each becomes an Accepted op or a Failed op.
 
-    stale = []
-    for path in list_op_files(failed_dir(queue_dir)):
-        try:
-            key = state.task_key(parse_op(path).task)
-        except InvalidOp:
-            continue
-        if path.name < newest.get(key, ""):
-            stale.append(path)
-    return applied + stale
-
-
-def apply_queue(api: TasksApi, state: State, queue_dir: Path, now: datetime) -> list[Path]:
-    """Apply the queued ops that are not applied yet, in order. Return done_files().
-
-    An op that can never succeed moves to failed/ and never blocks later ops.
-    Any other error (network, auth, disk, a bug) stops the round: the op and all later ops stay for the next round.
+    Any error that is not OpFailed (network, auth, disk, a bug) stops the round: the op and all later ops
+    stay in the Queue for the next round.
     """
-    for path in list_op_files(queue_dir):
-        if path.name in state.applied:
-            continue
+    for path, op in queue.pending():
         try:
-            op = parse_op(path)
             apply_op(api, state, op, now)
         except OpFailed as e:
             log.warning("failed op %s: %s: %s", path.name, type(e).__name__, e)
-            move_to_failed(path)
+            queue.fail(path)
+            if op.kind == "create" and state.insert_attempts.pop(op.task, None):
+                state.save()
         else:
-            state.applied[path.name] = state.task_key(op.task)
-            state.save()
-    return done_files(queue_dir, state)
+            queue.accept(path)
