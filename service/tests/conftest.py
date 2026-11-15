@@ -40,11 +40,15 @@ class FakeApi:
         if method in self.fail:
             raise self.fail.pop(method)
 
-    def _live(self, task_id: str) -> Task:
+    def _get(self, task_id: str) -> Task:
+        """As the real API: a deleted task can still be patched and deleted. Only a missing one is 404."""
         task = self.tasks.get(task_id)
-        if task is None or task.get("deleted"):
+        if task is None:
             raise NotFound(task_id)
         return task
+
+    def _children(self, task_id: str) -> list[Task]:
+        return [t for t in self.tasks.values() if t.get("parent") == task_id]
 
     def insert(self, body: Task) -> Task:
         self._check("insert")
@@ -58,14 +62,18 @@ class FakeApi:
     def patch(self, task_id: str, body: Task) -> Task:
         self._check("patch")
         self.calls.append(("patch", task_id, body))
-        task = self._live(task_id)
+        task = self._get(task_id)
         task.update(body)
+        if body.get("status") == "completed":  # As the real API.
+            for child in self._children(task_id):
+                child["status"] = "completed"
         return task
 
     def delete(self, task_id: str) -> None:
         self._check("delete")
         self.calls.append(("delete", task_id))
-        self._live(task_id)["deleted"] = True
+        for task in [self._get(task_id), *self._children(task_id)]:
+            task["deleted"] = True
 
     def list_updated_since(self, since: datetime) -> list[Task]:
         self._check("list_updated_since")
