@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from gtasks_sync.api import AuthError, BadRequest, Transient
+from gtasks_sync.api import AuthError, BadRequest, Transient, iso
 from gtasks_sync.apply import ADOPT_SLACK, apply_queue
 from gtasks_sync.queue import failed_dir, list_op_files
 from gtasks_sync.state import Mapped, State, load_state
@@ -24,14 +24,10 @@ def run(api: FakeApi, state: State, queue_dir: Path) -> Run:
 
 
 @pytest.fixture
-def replay_create(state: State, write_op: WriteOp) -> Callable[[], Path]:
+def replay_create(state: State, write_op: WriteOp) -> None:
     """A create for "milk" whose earlier insert attempt left a mark: the adopt path."""
-
-    def make() -> Path:
-        state.insert_attempts[LOCAL_ID] = NOW
-        return write_op("create", title="milk")
-
-    return make
+    state.insert_attempts[LOCAL_ID] = NOW
+    write_op("create", title="milk")
 
 
 def failed_names(queue_dir: Path) -> list[str]:
@@ -90,43 +86,41 @@ def test_mark_without_match_inserts(api: FakeApi, state: State, write_op: WriteO
     assert sorted(t["title"] for t in api.live()) == ["milk", "other"]
 
 
-def test_adopt_skips_mapped_deleted_and_different_tasks(
-    api: FakeApi, state: State, replay_create: Callable[[], Path], run: Run
-) -> None:
+@pytest.mark.usefixtures("replay_create")
+def test_adopt_skips_mapped_deleted_and_different_tasks(api: FakeApi, state: State, run: Run) -> None:
     mapped = api.add(title="milk")
     api.add(title="milk", deleted=True)
     api.add(title="milk", notes="different")
     api.add(title="milk", due="2026-11-21T00:00:00.000Z")
     target = api.add(title="milk")
     state.map(OTHER_LOCAL_ID, mapped["id"], NOW)
-    replay_create()
     run()
     assert state.resolve(LOCAL_ID) == target["id"]
     assert "insert" not in api.call_names()
 
 
-def test_adopt_ignores_completed_tasks_and_subtasks(api: FakeApi, replay_create: Callable[[], Path], run: Run) -> None:
+@pytest.mark.usefixtures("replay_create")
+def test_adopt_ignores_completed_tasks_and_subtasks(api: FakeApi, run: Run) -> None:
     """An old "milk" completed in the same round must not take the place of a new "milk"."""
     api.add(title="milk", status="completed")
     parent = api.add(title="p")
     api.add(title="milk", parent=parent["id"])
-    replay_create()
     run()
     assert api.call_names() == ["list_updated_since", "insert"]
 
 
-def test_two_matches_insert_instead_of_adopt(api: FakeApi, replay_create: Callable[[], Path], run: Run) -> None:
+@pytest.mark.usefixtures("replay_create")
+def test_two_matches_insert_instead_of_adopt(api: FakeApi, run: Run) -> None:
     """A wrong adopt loses the capture. A duplicate does not."""
     api.add(title="milk")
     api.add(title="milk")
-    replay_create()
     run()
     assert len(api.live()) == 3
 
 
-def test_adopt_ignores_tasks_updated_before_the_mark(api: FakeApi, replay_create: Callable[[], Path], run: Run) -> None:
-    api.add(title="milk", updated=(NOW - ADOPT_SLACK - timedelta(seconds=1)).isoformat())
-    replay_create()
+@pytest.mark.usefixtures("replay_create")
+def test_adopt_ignores_tasks_updated_before_the_mark(api: FakeApi, run: Run) -> None:
+    api.add(title="milk", updated=iso(NOW - ADOPT_SLACK - timedelta(seconds=1)))
     run()
     assert api.call_names() == ["list_updated_since", "insert"]
 
@@ -171,10 +165,13 @@ def test_delete(api: FakeApi, write_op: WriteOp, run: Run) -> None:
     assert api.live() == []
 
 
-@pytest.mark.parametrize(
+EXISTING_TASK_OPS = pytest.mark.parametrize(
     ("kind", "fields"),
     [("update", {"fields": {"title": "x"}}), ("complete", {}), ("uncomplete", {}), ("delete", {})],
 )
+
+
+@EXISTING_TASK_OPS
 def test_op_on_task_deleted_elsewhere_is_skipped(
     api: FakeApi, write_op: WriteOp, queue_dir: Path, run: Run, kind: str, fields: dict[str, Any]
 ) -> None:
@@ -184,10 +181,7 @@ def test_op_on_task_deleted_elsewhere_is_skipped(
     assert failed_names(queue_dir) == []
 
 
-@pytest.mark.parametrize(
-    ("kind", "fields"),
-    [("update", {"fields": {"title": "x"}}), ("complete", {}), ("uncomplete", {}), ("delete", {})],
-)
+@EXISTING_TASK_OPS
 def test_op_on_missing_task_is_skipped(
     write_op: WriteOp, queue_dir: Path, run: Run, kind: str, fields: dict[str, Any]
 ) -> None:
@@ -215,6 +209,18 @@ def test_op_on_unmapped_local_id_fails(write_op: WriteOp, queue_dir: Path, run: 
     path = write_op("update", task=OTHER_LOCAL_ID, fields={"title": "x"})
     assert run() == []
     assert failed_names(queue_dir) == [path.name]
+
+
+def test_delete_dismisses_a_failed_capture(api: FakeApi, write_op: WriteOp, queue_dir: Path, run: Run) -> None:
+    """The create failed, so the task never reached Google. A delete removes the failed create."""
+    api.fail["insert"] = BadRequest("400")
+    create = write_op("create", title="milk")
+    run()
+    assert failed_names(queue_dir) == [create.name]
+
+    delete = write_op("delete")
+    assert run() == [delete, failed_dir(queue_dir) / create.name]
+    assert api.calls == []
 
 
 def test_bad_file_and_bad_request_fail_and_do_not_block(

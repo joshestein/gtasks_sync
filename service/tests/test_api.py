@@ -21,9 +21,9 @@ from gtasks_sync.errors import OpFailed
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, body: Any = None) -> None:
+    def __init__(self, status_code: int, body: Any = None, raw: bytes | None = None) -> None:
         self.status_code = status_code
-        self.content = b"" if body is None else json.dumps(body).encode()
+        self.content = raw if raw is not None else b"" if body is None else json.dumps(body).encode()
 
     def json(self) -> Any:
         return json.loads(self.content)
@@ -51,8 +51,8 @@ def test_insert_patch_delete_requests() -> None:
     api = HttpTasksApi(session)
 
     assert api.insert({"title": "milk"}) == {"id": "t1"}
-    assert api.patch("a/b", {"title": "x"}) == {"id": "a/b"}
-    assert api.delete("t1") is None
+    api.patch("a/b", {"title": "x"})
+    api.delete("t1")
 
     assert session.requests == [
         ("POST", BASE_URL, {"params": None, "json": {"title": "milk"}, "timeout": TIMEOUT}),
@@ -101,6 +101,9 @@ def test_list_open_and_updated_since_params() -> None:
         (FakeResponse(401), AuthError),
         (FakeResponse(403, error_body("accessNotConfigured")), AuthError),
         (FakeResponse(403, error_body("userRateLimitExceeded")), Transient),
+        (FakeResponse(403, error_body("dailyLimitExceeded")), Transient),
+        (FakeResponse(200, raw=b"<html>captive portal</html>"), Transient),
+        (requests.exceptions.ChunkedEncodingError("cut"), Transient),
         (FakeResponse(429), Transient),
         (FakeResponse(503), Transient),
         (FakeResponse(409), ApiError),
@@ -113,8 +116,33 @@ def test_list_open_and_updated_since_params() -> None:
 )
 def test_errors(response: FakeResponse | Exception, error: type[ApiError]) -> None:
     with pytest.raises(error) as raised:
-        HttpTasksApi(FakeSession(response)).patch("t1", {})
+        HttpTasksApi(FakeSession(response)).call("PATCH", "t1", body={})
     assert type(raised.value) is error
+
+
+@pytest.mark.parametrize(
+    "response",
+    [FakeResponse(404), FakeResponse(410), FakeResponse(200, {"id": "t1", "deleted": True})],
+)
+def test_patch_on_a_gone_task_is_not_an_error(response: FakeResponse) -> None:
+    HttpTasksApi(FakeSession(response)).patch("t1", {"title": "x"})
+
+
+@pytest.mark.parametrize("response", [FakeResponse(404), FakeResponse(204)])
+def test_delete_of_a_gone_task_is_not_an_error(response: FakeResponse) -> None:
+    HttpTasksApi(FakeSession(response)).delete("t1")
+
+
+def test_patch_and_delete_raise_other_errors() -> None:
+    with pytest.raises(Transient):
+        HttpTasksApi(FakeSession(FakeResponse(503))).patch("t1", {})
+    with pytest.raises(BadRequest):
+        HttpTasksApi(FakeSession(FakeResponse(400))).delete("t1")
+
+
+def test_empty_list_response_is_transient() -> None:
+    with pytest.raises(Transient):
+        HttpTasksApi(FakeSession(FakeResponse(200))).list_open()
 
 
 def test_only_bad_request_makes_a_failed_op() -> None:

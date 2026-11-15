@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from gtasks_sync.api import NotFound, Task, Transient
+from gtasks_sync.api import Task, Transient, iso
 from gtasks_sync.state import State
 
 LOCAL_ID = "local:1763198043000-3f9a0c1e"
@@ -23,16 +23,15 @@ class FakeApi:
     def __init__(self) -> None:
         self.tasks: dict[str, Task] = {}
         self.calls: list[tuple[Any, ...]] = []
-        self._next_id = 1
+        self._ids = count(1)
         # Method name -> error to raise before the call does anything.
         self.fail: dict[str, Exception] = {}
         # Insert stores the task, then raises Transient: the response was lost.
         self.lose_insert_response = False
 
     def add(self, **fields: Any) -> Task:
-        task_id = f"t{self._next_id}"
-        self._next_id += 1
-        task: Task = {"id": task_id, "status": "needsAction", "updated": NOW.isoformat(), **fields}
+        task_id = f"t{next(self._ids)}"
+        task: Task = {"id": task_id, "status": "needsAction", "updated": iso(NOW), **fields}
         self.tasks[task_id] = task
         return task
 
@@ -40,12 +39,6 @@ class FakeApi:
         if method in self.fail:
             raise self.fail.pop(method)
 
-    def _get(self, task_id: str) -> Task:
-        """As the real API: a deleted task can still be patched and deleted. Only a missing one is 404."""
-        task = self.tasks.get(task_id)
-        if task is None:
-            raise NotFound(task_id)
-        return task
 
     def _children(self, task_id: str) -> list[Task]:
         return [t for t in self.tasks.values() if t.get("parent") == task_id]
@@ -59,21 +52,23 @@ class FakeApi:
             raise Transient("timeout")
         return task
 
-    def patch(self, task_id: str, body: Task) -> Task:
+    def patch(self, task_id: str, body: Task) -> None:
         self._check("patch")
         self.calls.append(("patch", task_id, body))
-        task = self._get(task_id)
-        task.update(body)
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        task.update(body)  # As the real API: a deleted task takes the patch and stays deleted.
         if body.get("status") == "completed":  # As the real API.
             for child in self._children(task_id):
                 child["status"] = "completed"
-        return task
 
     def delete(self, task_id: str) -> None:
         self._check("delete")
         self.calls.append(("delete", task_id))
-        for task in [self._get(task_id), *self._children(task_id)]:
-            task["deleted"] = True
+        if task_id in self.tasks:
+            for task in [self.tasks[task_id], *self._children(task_id)]:
+                task["deleted"] = True
 
     def list_updated_since(self, since: datetime) -> list[Task]:
         self._check("list_updated_since")

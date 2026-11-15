@@ -1,6 +1,8 @@
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
+
 from gtasks_sync.state import MAP_TTL, Mapped, State, load_state
 
 from .conftest import LOCAL_ID, NOW, OTHER_LOCAL_ID
@@ -17,13 +19,23 @@ def test_round_trip(state_path: Path) -> None:
     assert load_state(state_path) == state
 
 
-def test_missing_or_bad_file_gives_empty_state(state_path: Path) -> None:
-    empty = State(path=state_path)
-    assert load_state(state_path) == empty
-    state_path.write_text("{")
-    assert load_state(state_path) == empty
-    state_path.write_text('{"version": 99}')
-    assert load_state(state_path) == empty
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "{",
+        '{"version": 99}',
+        '{"version": 1, "id_map": {}, "insert_attempts": {}, "applied": []}',
+        '{"version": 1, "id_map": {}, "insert_attempts": {}, "applied": null}',
+        '{"version": 1, "id_map": {}, "insert_attempts": {}, "applied": {"a.json": 3}}',
+        '{"version": 1, "id_map": {"local:1-00000000": {"task_id": null, "at": "2026-11-15T09:00:00+00:00"}},'
+        ' "insert_attempts": {}, "applied": {}}',
+    ],
+)
+def test_missing_or_bad_file_gives_empty_state(state_path: Path, content: str | None) -> None:
+    if content is not None:
+        state_path.write_text(content)
+    assert load_state(state_path) == State(path=state_path)
 
 
 def test_resolve_and_task_key(state: State) -> None:

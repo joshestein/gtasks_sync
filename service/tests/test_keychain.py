@@ -6,6 +6,7 @@ from collections.abc import Iterator
 import pytest
 
 from gtasks_sync import keychain
+from gtasks_sync.api import AuthError
 from gtasks_sync.keychain import KeychainError, Secrets, delete_secrets, read_secrets, save_secrets
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS Keychain")
@@ -34,6 +35,11 @@ def test_missing() -> None:
     with pytest.raises(KeychainError, match="gtasks-sync setup"):
         read_secrets()
     assert not delete_secrets()
+
+
+def test_keychain_error_is_an_auth_error() -> None:
+    """The loop shows the same "run setup" warning for both."""
+    assert issubclass(KeychainError, AuthError)
 
 
 def test_delete() -> None:
