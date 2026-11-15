@@ -3,7 +3,7 @@
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,63 +12,48 @@ from gtasks_sync.queue import is_local_id
 
 log = logging.getLogger(__name__)
 
-STATE_VERSION = 1
-# An id map entry lives this long after its task got its id, while no op names its local id.
-MAP_TTL = timedelta(days=7)
-
-
-@dataclass(frozen=True)
-class Mapped:
-    task_id: str
-    at: datetime
+# 2: id_map values are task ids, and applied ops moved to queue/accepted/.
+STATE_VERSION = 2
 
 
 @dataclass
 class State:
     path: Path = field(compare=False)
-    id_map: dict[str, Mapped] = field(default_factory=dict)
-    # Local id -> time of the first insert attempt (ADR 0001).
+    # Local id -> task id. An entry lives while its task is in the Cache.
+    id_map: dict[str, str] = field(default_factory=dict)
+    # Local id -> time of the first insert attempt (ADR 0001). Gone once the create is mapped or failed.
     insert_attempts: dict[str, datetime] = field(default_factory=dict)
-    # Op file name -> its task (task id when known, else local id), for ops the API accepted.
-    # They stay on disk until the cache has their result.
-    applied: dict[str, str] = field(default_factory=dict)
 
     def resolve(self, task: str) -> str | None:
-        """The task id for an op's task. None for a local id with no task id yet."""
-        if not is_local_id(task):
-            return task
-        mapped = self.id_map.get(task)
-        return mapped.task_id if mapped else None
+        """The task id for an op's task. None for a local id with no task id."""
+        return self.id_map.get(task) if is_local_id(task) else task
 
     def task_key(self, task: str) -> str:
         """One key per task, whether an op names it by local id or task id."""
         return self.resolve(task) or task
 
-    def map(self, local_id: str, task_id: str, at: datetime) -> None:
-        self.id_map[local_id] = Mapped(task_id, at)
+    def map(self, local_id: str, task_id: str) -> None:
+        self.id_map[local_id] = task_id
         self.insert_attempts.pop(local_id, None)
 
     def local_ids(self) -> dict[str, str]:
         """Task id -> local id."""
-        return {m.task_id: local_id for local_id, m in self.id_map.items()}
+        return {task_id: local_id for local_id, task_id in self.id_map.items()}
 
-    def prune(self, now: datetime, referenced: set[str]) -> None:
-        """Drop old id map entries and attempt marks that no op names."""
-        self.id_map = {
-            local_id: m
-            for local_id, m in self.id_map.items()
-            if local_id in referenced or now - m.at < MAP_TTL
-        }
-        self.insert_attempts = {k: v for k, v in self.insert_attempts.items() if k in referenced}
+    def keep_tasks(self, task_ids: set[str]) -> bool:
+        """Drop id map entries for tasks not in the Cache. Return True if any were dropped."""
+        kept = {local_id: task_id for local_id, task_id in self.id_map.items() if task_id in task_ids}
+        changed = kept != self.id_map
+        self.id_map = kept
+        return changed
 
     def save(self) -> None:
         write_json_atomic(
             self.path,
             {
                 "version": STATE_VERSION,
-                "id_map": {k: {"task_id": m.task_id, "at": m.at.isoformat()} for k, m in self.id_map.items()},
+                "id_map": self.id_map,
                 "insert_attempts": {k: v.isoformat() for k, v in self.insert_attempts.items()},
-                "applied": self.applied,
             },
         )
 
@@ -85,11 +70,8 @@ def _from_json(path: Path, raw: dict[str, Any]) -> State:
         raise ValueError(f"unknown state version {raw['version']!r}")
     return State(
         path=path,
-        id_map={
-            _str(k): Mapped(_str(v["task_id"]), datetime.fromisoformat(v["at"])) for k, v in raw["id_map"].items()
-        },
+        id_map={_str(k): _str(v) for k, v in raw["id_map"].items()},
         insert_attempts={_str(k): datetime.fromisoformat(v) for k, v in raw["insert_attempts"].items()},
-        applied={_str(k): _str(v) for k, v in raw["applied"].items()},
     )
 
 
