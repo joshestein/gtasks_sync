@@ -93,6 +93,7 @@ describe("dates", () => {
 describe("markdown", () => {
   it("escapes markdown so text shows as written, and keeps line breaks and indents", () => {
     expect(escapeMarkdown("# a *b*")).toBe("\\# a \\*b\\*");
+    expect(escapeMarkdown("&copy;")).toBe("\\&copy;");
     expect(escapeMarkdown("x\n  y")).toBe("x  \n  y");
   });
 
