@@ -66,24 +66,16 @@ def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
             # also removes the failed create (done_files), so a failed capture can be dismissed.
             return
         raise UnmappedLocalId(op.task)
-    result: Task | None = None
-    try:
-        match op.kind:
-            case "update":
-                result = api.patch(task_id, patch_body(op.fields))
-            case "complete":
-                # The API also completes the subtasks, as the Google apps do.
-                result = api.patch(task_id, {"status": "completed"})
-            case "uncomplete":
-                result = api.patch(task_id, {"status": "needsAction"})
-            case "delete":
-                api.delete(task_id)  # A second delete is not an error.
-                return
-    except NotFound:
-        pass
-    # A patch on a deleted task succeeds and returns it with deleted: true. It stays deleted.
-    if result is None or result.get("deleted"):
-        log.info("%s had no effect: task %s was deleted elsewhere", op.kind, task_id)
+    match op.kind:
+        case "update":
+            api.patch(task_id, patch_body(op.fields))
+        case "complete":
+            # The API also completes the subtasks, as the Google apps do.
+            api.patch(task_id, {"status": "completed"})
+        case "uncomplete":
+            api.patch(task_id, {"status": "needsAction"})
+        case "delete":
+            api.delete(task_id)
 
 
 def done_files(queue_dir: Path, state: State) -> list[Path]:
