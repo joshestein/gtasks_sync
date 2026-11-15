@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from gtasks_sync.api import Task, Transient, iso
+from gtasks_sync.inbox import Inbox
 from gtasks_sync.queue import Queue
 from gtasks_sync.state import State
 
@@ -111,6 +112,13 @@ def queue_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def queue(queue_dir: Path) -> Queue:
     return Queue(queue_dir)
+
+
+@pytest.fixture
+def inbox(tmp_path: Path) -> Inbox:
+    d = tmp_path / "inbox"
+    d.mkdir()
+    return Inbox(d)
 
 
 def accepted(path: Path) -> Path:

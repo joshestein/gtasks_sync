@@ -3,7 +3,8 @@ from typing import Any
 
 import pytest
 
-from gtasks_sync.queue import InvalidOp, Op, Queue, list_op_files, parse_op
+from gtasks_sync.queue import LOCAL_ID_RE, InvalidOp, Op, Queue, list_op_files, mint_local_id, parse_op
+from gtasks_sync.queue import write_op as write_op_file
 
 from .conftest import LOCAL_ID, OTHER_LOCAL_ID, WriteOp, accepted
 
@@ -110,3 +111,24 @@ def test_finish_removes_accepted_ops_and_failed_ops_that_no_longer_mean_anything
     assert removed == [accepted(done), superseded, gone, newer]
     assert list_op_files(queue.accepted_dir) == []
     assert list_op_files(queue.failed_dir) == [current, capture, unreadable, after]
+
+
+# write_op_file: the service's own op writer, for the Inbox.
+
+
+def test_write_op_writes_an_op_that_parses(queue_dir: Path) -> None:
+    task = mint_local_id(1763198043000)
+    assert LOCAL_ID_RE.fullmatch(task)
+    path = write_op_file(queue_dir, {"op": "create", "task": task, "title": "milk", "notes": "", "due": None}, 1763198043000)
+    assert path.name.startswith("1763198043000-")
+    assert list_op_files(queue_dir) == [path]
+    assert parse_op(path) == Op(kind="create", task=task, fields={"title": "milk", "notes": "", "due": None})
+    assert [p.name for p in queue_dir.iterdir()] == [path.name]  # No temp file left.
+
+
+def test_write_op_names_sort_after_every_op_on_the_mac(queue: Queue, write_op: WriteOp) -> None:
+    done = write_op("delete")
+    queue.accept(done)
+    newest = int(done.name.split("-")[0])
+    path = write_op_file(queue.dir, {"op": "delete", "task": "t1"}, newest - 5000)  # Clock stepped back.
+    assert path.name.startswith(f"{newest + 1}-")

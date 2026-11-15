@@ -10,6 +10,7 @@ from watchdog.events import FileCreatedEvent, FileModifiedEvent, FileMovedEvent
 from gtasks_sync import service
 from gtasks_sync.api import AuthError, Transient, iso
 from gtasks_sync.cache import SyncError, read_cache
+from gtasks_sync.inbox import Inbox
 from gtasks_sync.keychain import KeychainError
 from gtasks_sync.queue import SYNC_NOW_FILE, Queue, list_op_files
 from gtasks_sync.service import (
@@ -44,13 +45,15 @@ MakeSyncer = Callable[..., Syncer]
 
 
 @pytest.fixture
-def make_syncer(api: FakeApi, state: State, queue: Queue, cache_file: Path, opens: list[int]) -> MakeSyncer:
+def make_syncer(
+    api: FakeApi, state: State, queue: Queue, inbox: Inbox, cache_file: Path, opens: list[int]
+) -> MakeSyncer:
     def open_fake() -> FakeApi:
         opens.append(1)
         return api
 
     def make(open_api: Callable[[], FakeApi] = open_fake, now: datetime = NOW) -> Syncer:
-        return Syncer(open_api=open_api, state=state, queue=queue, cache_file=cache_file, now=lambda: now)
+        return Syncer(open_api=open_api, state=state, queue=queue, inbox=inbox, cache_file=cache_file, now=lambda: now)
 
     return make
 
@@ -142,6 +145,41 @@ def test_auth_error_opens_the_api_again_next_round(syncer: Syncer, api: FakeApi,
     assert len(opens) == 2
     syncer.round()
     assert len(opens) == 2
+
+
+def test_round_turns_inbox_files_into_tasks_in_the_same_round(
+    syncer: Syncer, api: FakeApi, inbox: Inbox, queue: Queue, cache_file: Path
+) -> None:
+    (inbox.dir / "a.json").write_text('{"text": "buy milk"}')
+
+    assert syncer.round() is None
+
+    assert [t["title"] for t in api.live()] == ["buy milk"]
+    assert titles(cache_file) == ["buy milk"]
+    assert inbox.files() == []
+    assert list_op_files(queue.dir) == []
+
+
+def test_inbox_file_reaches_the_queue_when_the_api_is_down(make_syncer: MakeSyncer, inbox: Inbox, queue: Queue) -> None:
+    (inbox.dir / "a.json").write_text('{"text": "buy milk"}')
+
+    def broken() -> FakeApi:
+        raise Transient("offline")
+
+    assert make_syncer(open_api=broken).round() is not None
+    assert len(list_op_files(queue.dir)) == 1
+    assert inbox.files() == []
+
+
+def test_inbox_step_error_does_not_stop_the_round(
+    syncer: Syncer, inbox: Inbox, api: FakeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_: object) -> None:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(inbox, "ingest", boom)
+    api.add(title="old")
+    assert syncer.round() is None
 
 
 def test_keychain_error_is_an_auth_error(make_syncer: MakeSyncer) -> None:
