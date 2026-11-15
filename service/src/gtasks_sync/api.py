@@ -139,8 +139,14 @@ class HttpTasksApi:
     def insert(self, body: Task) -> Task:
         return self.call("POST", body=body)
 
-    def patch(self, task_id: str, body: Task) -> Task:
-        return self.call("PATCH", task_id, body=body)
+    def patch(self, task_id: str, body: Task) -> None:
+        # Google reports a gone task as a 404, or as a 200 with deleted: true. Both mean the task stays gone.
+        try:
+            task = self.call("PATCH", task_id, body=body)
+        except NotFound:
+            task = {"deleted": True}
+        if task and task.get("deleted"):
+            log.info("patch had no effect: task %s was deleted elsewhere", task_id)
 
     def delete(self, task_id: str) -> None:
         # A second delete succeeds. A purged task gives 404.
