@@ -5,14 +5,16 @@ import json
 import subprocess
 from dataclasses import asdict, dataclass
 
+from gtasks_sync.api import AuthError
+
 SECURITY = "/usr/bin/security"
 SERVICE = "gtasks-sync"
 ACCOUNT = "oauth"
 NOT_FOUND = 44
 
 
-class KeychainError(Exception):
-    pass
+class KeychainError(AuthError):
+    """The fix is the same as for a revoked token: run setup."""
 
 
 @dataclass(frozen=True)
