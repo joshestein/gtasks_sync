@@ -43,6 +43,11 @@ class TasksApi(Protocol):
         ...
 
 
+def iso(dt: datetime) -> str:
+    """RFC 3339 in UTC with milliseconds, the same format as JS Date.toISOString()."""
+    return dt.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def due_to_api(day: str) -> str:
     """YYYY-MM-DD to the API's form. The API keeps only the date part.
 

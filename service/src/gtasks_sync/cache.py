@@ -3,11 +3,11 @@
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from gtasks_sync.api import Task, task_fields
+from gtasks_sync.api import Task, iso, task_fields
 from gtasks_sync.atomic import write_json_atomic
 from gtasks_sync.state import State
 
@@ -25,15 +25,8 @@ class SyncError:
 @dataclass(frozen=True)
 class Status:
     synced_at: datetime | None
-    last_attempt_at: datetime | None
+    last_attempt_at: datetime
     error: SyncError | None
-
-
-def iso(dt: datetime | None) -> str | None:
-    """Same format as JS Date.toISOString()."""
-    if dt is None:
-        return None
-    return dt.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def task_to_dict(task: Task, local_id: str | None) -> dict[str, Any]:
@@ -74,7 +67,7 @@ def write_cache(path: Path, tasks: list[dict[str, Any]], status: Status) -> None
         path,
         {
             "version": CACHE_VERSION,
-            "synced_at": iso(status.synced_at),
+            "synced_at": iso(status.synced_at) if status.synced_at else None,
             "last_attempt_at": iso(status.last_attempt_at),
             "error": {"kind": error.kind, "message": error.message} if error else None,
             "tasks": tasks,
