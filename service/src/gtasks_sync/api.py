@@ -81,6 +81,19 @@ def task_fields(task: Task) -> tuple[str, str, str | None]:
     return task.get("title", ""), task.get("notes", ""), due_from_api(task.get("due"))
 
 
+def patch_body(fields: dict[str, str | None]) -> Task:
+    """Op fields (due as YYYY-MM-DD or None) in the API's form."""
+    return {
+        name: (due_to_api(value) if value else None) if name == "due" else value
+        for name, value in fields.items()
+    }
+
+
+def insert_body(fields: dict[str, str | None]) -> Task:
+    # Title is never empty. Empty notes and no due date are left out.
+    return {name: value for name, value in patch_body(fields).items() if value}
+
+
 def _reason(response: Any) -> str:
     try:
         error = response.json()["error"]

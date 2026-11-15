@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from gtasks_sync.api import NotFound, Task, TasksApi, due_to_api, task_fields
+from gtasks_sync.api import NotFound, Task, TasksApi, insert_body, patch_body, task_fields
 from gtasks_sync.errors import OpFailed
 from gtasks_sync.queue import InvalidOp, Op, failed_dir, list_op_files, move_to_failed, parse_op
 from gtasks_sync.state import State
@@ -17,18 +17,6 @@ ADOPT_SLACK = timedelta(minutes=5)
 
 class UnmappedLocalId(OpFailed):
     """An op names a local id whose create failed."""
-
-
-def _patch_body(fields: dict[str, str | None]) -> Task:
-    return {
-        name: (due_to_api(value) if value else None) if name == "due" else value
-        for name, value in fields.items()
-    }
-
-
-def _insert_body(fields: dict[str, str | None]) -> Task:
-    # Title is never empty. Empty notes and no due date are left out.
-    return {name: value for name, value in _patch_body(fields).items() if value}
 
 
 def _matches(task: Task, fields: dict[str, str | None]) -> bool:
@@ -61,7 +49,7 @@ def _create(api: TasksApi, state: State, op: Op, now: datetime) -> None:
             log.warning("adopted task %s for %s after a lost insert", candidates[0]["id"], local_id)
             return
 
-    created = api.insert(_insert_body(op.fields))
+    created = api.insert(insert_body(op.fields))
     state.map(local_id, created["id"], now)
 
 
@@ -78,7 +66,7 @@ def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
     try:
         match op.kind:
             case "update":
-                result = api.patch(task_id, _patch_body(op.fields))
+                result = api.patch(task_id, patch_body(op.fields))
             case "complete":
                 # The API also completes the subtasks, as the Google apps do.
                 result = api.patch(task_id, {"status": "completed"})
