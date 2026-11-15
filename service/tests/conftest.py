@@ -1,7 +1,7 @@
 import json
-from itertools import count
 from collections.abc import Callable
 from datetime import UTC, datetime
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -131,7 +131,8 @@ def state(state_path: Path) -> State:
 @pytest.fixture
 def write_op(queue_dir: Path) -> WriteOp:
     """Write an op file the way the extension does. Names sort in call order."""
-    counter = count(1_700_000_000_000)
+    # From NOW on, so an op is newer than a task the fake API made at NOW.
+    counter = count(int(NOW.timestamp() * 1000))
 
     def write(op: str, task: str = LOCAL_ID, raw: str | None = None, **fields: Any) -> Path:
         path = queue_dir / f"{next(counter)}-abcd1234.json"

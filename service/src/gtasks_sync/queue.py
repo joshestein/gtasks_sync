@@ -4,9 +4,9 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
@@ -138,13 +138,16 @@ class Queue:
     def fail(self, path: Path) -> None:
         _move(path, self.failed_dir)
 
-    def finish(self, task_key: Callable[[str], str]) -> list[Path]:
-        """Call once the Cache shows the Accepted ops. Remove them, and each Failed op older than an
-        Accepted op for the same task: without that, a Failed op would stay on the Mac for good.
-        Return the removed files."""
+    def finish(self, task_key: Callable[[str], str], cached: Mapping[str, str | None]) -> list[Path]:
+        """Call once the Cache shows the Accepted ops. Remove them, and each Failed op that no longer means
+        anything. Return the removed files.
+
+        task_key: names one task whether an op uses its local id or task id.
+        cached: task id -> `updated` for every task in the Cache.
+        """
         accepted = list_op_files(self.accepted_dir)
         newest = {key: p.name for p in accepted if (key := _key(p, task_key))}  # Name order: the last wins.
-        stale = [p for p in list_op_files(self.failed_dir) if p.name < newest.get(_key(p, task_key) or "", "")]
+        stale = [p for p in list_op_files(self.failed_dir) if _is_stale(p, task_key, cached, newest)]
         for path in [*accepted, *stale]:
             path.unlink(missing_ok=True)
         return [*accepted, *stale]
@@ -155,3 +158,31 @@ def _key(path: Path, task_key: Callable[[str], str]) -> str | None:
         return task_key(parse_op(path).task)
     except InvalidOp:
         return None
+
+
+def _is_stale(
+    path: Path, task_key: Callable[[str], str], cached: Mapping[str, str | None], newest: Mapping[str, str]
+) -> bool:
+    """The one rule for when a Failed op goes. The Mac shows every Failed op, so it has no rule of its own.
+
+    It goes when a later op for its task was accepted, the task left the Cache, or Google has a newer version.
+    A failed create stays until a delete dismisses it: its task never reached Google.
+    """
+    try:
+        op = parse_op(path)
+    except InvalidOp:
+        return False
+    key = task_key(op.task)
+    if path.name < newest.get(key, ""):
+        return True
+    if op.kind == "create":
+        return False
+    if key not in cached:
+        return True
+    updated = cached[key]
+    return updated is not None and datetime.fromisoformat(updated) > _op_time(path)
+
+
+def _op_time(path: Path) -> datetime:
+    """When the Mac wrote the op, from its file name."""
+    return datetime.fromtimestamp(int(path.name.split("-")[0]) / 1000, UTC)

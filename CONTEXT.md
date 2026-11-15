@@ -22,7 +22,7 @@
 
 **Accepted op**: An op that Google has accepted and the Cache does not yet show. It leaves the Mac once the Cache has its result.
 
-**Failed op**: An op that can never succeed, for example a bad file. It leaves the queue, does not block later ops, and stays visible.
+**Failed op**: An op that can never succeed, for example a bad file. It leaves the queue, does not block later ops, and stays visible until a later change to its task replaces it.
 
 **Pending task**: A task with ops in the Queue or Accepted ops. The Mac shows the result of those ops at once.
 

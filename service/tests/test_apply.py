@@ -12,7 +12,7 @@ from gtasks_sync.state import State, load_state
 
 from .conftest import LOCAL_ID, NOW, OTHER_LOCAL_ID, FakeApi, WriteOp, accepted
 
-Run = Callable[..., list[Path]]
+Run = Callable[[], list[Path]]
 
 
 @pytest.fixture
@@ -20,7 +20,7 @@ def run(api: FakeApi, state: State, queue: Queue) -> Run:
     def run() -> list[Path]:
         """Apply, then finish as after a cache write. Return the removed files."""
         apply_queue(api, state, queue, NOW)
-        return queue.finish(state.task_key)
+        return queue.finish(state.task_key, {t["id"]: t.get("updated") for t in api.live()})
 
     return run
 
@@ -206,10 +206,12 @@ def test_ops_on_a_local_id_use_the_mapped_task(api: FakeApi, write_op: WriteOp, 
 # failures and replay
 
 
-def test_op_on_unmapped_local_id_fails(write_op: WriteOp, queue_dir: Path, run: Run) -> None:
+def test_op_on_unmapped_local_id_fails(
+    api: FakeApi, state: State, queue: Queue, write_op: WriteOp, queue_dir: Path
+) -> None:
     """Its create failed earlier, so the task does not exist."""
     path = write_op("update", task=OTHER_LOCAL_ID, fields={"title": "x"})
-    assert run() == []
+    apply_queue(api, state, queue, NOW)
     assert failed_names(queue_dir) == [path.name]
 
 
@@ -242,7 +244,7 @@ def test_bad_file_and_bad_request_fail_and_do_not_block(
 
 @pytest.mark.parametrize("error", [Transient("timeout"), AuthError("revoked")])
 def test_transient_or_auth_error_stops_the_round_and_keeps_later_ops(
-    api: FakeApi, state: State, write_op: WriteOp, queue_dir: Path, run: Run, error: Exception
+    api: FakeApi, write_op: WriteOp, queue_dir: Path, run: Run, error: Exception
 ) -> None:
     task = api.add(title="milk")
     first = write_op("update", task=task["id"], fields={"title": "a"})
@@ -261,7 +263,7 @@ def test_transient_or_auth_error_stops_the_round_and_keeps_later_ops(
 
 
 def test_unexpected_error_stops_the_round_and_keeps_the_op(
-    api: FakeApi, state: State, write_op: WriteOp, queue_dir: Path, run: Run
+    api: FakeApi, write_op: WriteOp, queue_dir: Path, run: Run
 ) -> None:
     """For example a full disk. The op could succeed later, so it must not become a failed op."""
     task = api.add(title="milk")

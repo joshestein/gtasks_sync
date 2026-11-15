@@ -104,7 +104,7 @@ class Syncer:
             write_cache(self.cache_file, tasks, Status(self.synced_at, attempt_at, error))
             if error is None:
                 # Only now, with their result in the cache, can Accepted ops go: a pending task never flickers.
-                self.queue.finish(self.state.task_key)
+                self.queue.finish(self.state.task_key, {t["id"]: t["updated"] for t in tasks})
                 if self.state.keep_tasks({t["id"] for t in tasks}):
                     self.state.save()
         except Exception as e:  # For example a full disk. The next round tries again.

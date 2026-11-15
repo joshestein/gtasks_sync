@@ -86,25 +86,27 @@ def test_accept_and_fail_move_the_file(queue: Queue, write_op: WriteOp) -> None:
     assert list_op_files(queue.failed_dir) == [queue.failed_dir / second.name]
 
 
-def same(task: str) -> str:
-    return task
-
-
-def test_finish_removes_accepted_ops_and_older_failed_ops_for_the_same_task(queue: Queue, write_op: WriteOp) -> None:
-    old_failed = write_op("update", task=LOCAL_ID, fields={"title": "x"})
-    other_failed = write_op("update", task=OTHER_LOCAL_ID, fields={"title": "x"})
-    unreadable_failed = write_op("delete", raw="{")
-    for path in (old_failed, other_failed, unreadable_failed):
+def test_finish_removes_accepted_ops_and_failed_ops_that_no_longer_mean_anything(
+    queue: Queue, write_op: WriteOp
+) -> None:
+    def failed(op: str, task: str, **fields: Any) -> Path:
+        path = write_op(op, task=task, **fields)
         queue.fail(path)
+        return queue.failed_dir / path.name
+
+    superseded = failed("update", LOCAL_ID, fields={"title": "x"})  # A later op for the task was accepted.
+    gone = failed("complete", "gone")  # The task left the Cache.
+    newer = failed("update", "t2", fields={"title": "x"})  # Google has a newer version.
+    current = failed("update", "t3", fields={"title": "x"})
+    capture = failed("create", OTHER_LOCAL_ID, title="milk")  # Stays until a delete dismisses it.
+    unreadable = failed("delete", "t3", raw="{")
     done = write_op("delete")
     queue.accept(done)
-    newer_failed = write_op("update", task=LOCAL_ID, fields={"title": "y"})
-    queue.fail(newer_failed)
+    after = failed("update", LOCAL_ID, fields={"title": "y"})
+    cached = {LOCAL_ID: None, "t2": "2030-01-01T00:00:00.000Z", "t3": "2020-01-01T00:00:00.000Z"}
 
-    removed = queue.finish(same)
+    removed = queue.finish(str, cached)
 
-    assert removed == [accepted(done), queue.failed_dir / old_failed.name]
+    assert removed == [accepted(done), superseded, gone, newer]
     assert list_op_files(queue.accepted_dir) == []
-    assert [p.name for p in list_op_files(queue.failed_dir)] == sorted(
-        [other_failed.name, unreadable_failed.name, newer_failed.name]
-    )
+    assert list_op_files(queue.failed_dir) == [current, capture, unreadable, after]
