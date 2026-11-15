@@ -1,5 +1,5 @@
 /** Sections, order, and search for the Tasks list. */
-import type { Task } from "./store";
+import { subtasks, type Task } from "./store";
 
 export interface Row {
   task: Task;
@@ -33,8 +33,7 @@ function section(tasks: Task[], order: (a: Task, b: Task) => number, titles: Map
     .sort(order)
     .flatMap((top) => [
       row(top, false),
-      ...tasks
-        .filter((t) => t.parent === top.id)
+      ...subtasks(tasks, top)
         .sort(byPosition)
         .map((t) => row(t, true)),
     ]);
