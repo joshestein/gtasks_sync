@@ -36,7 +36,7 @@ class Transient(ApiError):
 
 
 class AuthError(ApiError):
-    """The refresh token is revoked or expired, or access is denied."""
+    """The refresh token is revoked or expired, access is denied, or Keychain cannot be read. Run setup."""
 
 
 class TasksApi(Protocol):

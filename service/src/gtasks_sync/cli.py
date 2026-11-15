@@ -2,8 +2,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from gtasks_sync.api import ApiError
 from gtasks_sync.auth import authorize, open_api
-from gtasks_sync.keychain import save_secrets
+from gtasks_sync.keychain import KeychainError, save_secrets
 
 
 def setup(args: argparse.Namespace) -> None:
@@ -13,9 +14,17 @@ def setup(args: argparse.Namespace) -> None:
     print("A browser window opens. Sign in and allow access to Google Tasks.")
     secrets = authorize(client_secret)
 
-    tasks = open_api(secrets).list_open()
-    save_secrets(secrets)
-    print(f"Access works ({len(tasks)} open tasks). Secrets saved to Keychain.")
+    # Save first: if the check fails (network, API not enabled), a later check needs no new consent.
+    try:
+        save_secrets(secrets)
+    except KeychainError as e:
+        sys.exit(f"Cannot save to Keychain: {e}")
+    print("Secrets saved to Keychain.")
+    try:
+        tasks = open_api(secrets).list_open()
+    except ApiError as e:
+        sys.exit(f"Access check failed: {type(e).__name__}: {e}\nFix the cause (network, Tasks API enabled?) and run setup again.")
+    print(f"Access works ({len(tasks)} open tasks).")
 
 
 def main() -> None:
