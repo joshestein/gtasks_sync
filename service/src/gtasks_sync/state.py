@@ -73,14 +73,23 @@ class State:
         )
 
 
+def _str(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"expected a string, got {value!r}")
+    return value
+
+
 def _from_json(path: Path, raw: dict[str, Any]) -> State:
+    """Raise on any bad shape, so load_state starts empty instead of failing in every round."""
     if raw["version"] != STATE_VERSION:
         raise ValueError(f"unknown state version {raw['version']!r}")
     return State(
         path=path,
-        id_map={k: Mapped(v["task_id"], datetime.fromisoformat(v["at"])) for k, v in raw["id_map"].items()},
-        insert_attempts={k: datetime.fromisoformat(v) for k, v in raw["insert_attempts"].items()},
-        applied=raw["applied"],
+        id_map={
+            _str(k): Mapped(_str(v["task_id"]), datetime.fromisoformat(v["at"])) for k, v in raw["id_map"].items()
+        },
+        insert_attempts={_str(k): datetime.fromisoformat(v) for k, v in raw["insert_attempts"].items()},
+        applied={_str(k): _str(v) for k, v in raw["applied"].items()},
     )
 
 
