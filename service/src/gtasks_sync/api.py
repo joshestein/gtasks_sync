@@ -19,7 +19,13 @@ BASE_URL = "https://tasks.googleapis.com/tasks/v1/lists/@default/tasks"
 TIMEOUT = 30
 PAGE_SIZE = 100
 # 403 reasons that mean "slow down", not "no access".
-_RATE_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded", "limitExceeded"}
+_RATE_LIMIT_REASONS = {
+    "rateLimitExceeded",
+    "userRateLimitExceeded",
+    "quotaExceeded",
+    "dailyLimitExceeded",
+    "limitExceeded",
+}
 
 
 class ApiError(Exception):
@@ -90,10 +96,7 @@ def task_fields(task: Task) -> tuple[str, str, str | None]:
 
 def patch_body(fields: dict[str, str | None]) -> Task:
     """Op fields (due as YYYY-MM-DD or None) in the API's form."""
-    return {
-        name: (due_to_api(value) if value else None) if name == "due" else value
-        for name, value in fields.items()
-    }
+    return {name: (due_to_api(value) if value else None) if name == "due" else value for name, value in fields.items()}
 
 
 def insert_body(fields: dict[str, str | None]) -> Task:

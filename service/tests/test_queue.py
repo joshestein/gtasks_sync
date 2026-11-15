@@ -119,7 +119,9 @@ def test_finish_removes_accepted_ops_and_failed_ops_that_no_longer_mean_anything
 def test_write_op_writes_an_op_that_parses(queue_dir: Path) -> None:
     task = mint_local_id(1763198043000)
     assert LOCAL_ID_RE.fullmatch(task)
-    path = write_op_file(queue_dir, {"op": "create", "task": task, "title": "milk", "notes": "", "due": None}, 1763198043000)
+    path = write_op_file(
+        queue_dir, {"op": "create", "task": task, "title": "milk", "notes": "", "due": None}, 1763198043000
+    )
     assert path.name.startswith("1763198043000-")
     assert list_op_files(queue_dir) == [path]
     assert parse_op(path) == Op(kind="create", task=task, fields={"title": "milk", "notes": "", "due": None})

@@ -15,7 +15,9 @@ def _domain() -> str:
 
 
 def is_loaded() -> bool:
-    return subprocess.run(["launchctl", "print", f"{_domain()}/{LABEL}"], capture_output=True).returncode == 0
+    return (
+        subprocess.run(["launchctl", "print", f"{_domain()}/{LABEL}"], capture_output=True, check=False).returncode == 0
+    )
 
 
 def install(program: list[str], stdio_log: Path) -> None:
@@ -37,7 +39,9 @@ def install(program: list[str], stdio_log: Path) -> None:
     # bootout finishes asynchronously, so an immediate bootstrap can fail with an I/O error.
     error = ""
     for _ in range(10):
-        result = subprocess.run(["launchctl", "bootstrap", _domain(), str(PLIST_FILE)], capture_output=True, text=True)
+        result = subprocess.run(
+            ["launchctl", "bootstrap", _domain(), str(PLIST_FILE)], capture_output=True, text=True, check=False
+        )
         if result.returncode == 0:
             return
         error = result.stderr.strip()
@@ -47,5 +51,5 @@ def install(program: list[str], stdio_log: Path) -> None:
 
 def uninstall() -> None:
     # A bootout of an agent that is not loaded fails with no effect.
-    subprocess.run(["launchctl", "bootout", f"{_domain()}/{LABEL}"], capture_output=True)
+    subprocess.run(["launchctl", "bootout", f"{_domain()}/{LABEL}"], capture_output=True, check=False)
     PLIST_FILE.unlink(missing_ok=True)

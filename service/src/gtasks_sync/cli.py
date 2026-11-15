@@ -34,7 +34,9 @@ def setup(args: argparse.Namespace) -> None:
     try:
         tasks = open_api(secrets).list_open()
     except ApiError as e:
-        sys.exit(f"Access check failed: {type(e).__name__}: {e}\nFix the cause (network, Tasks API enabled?) and run setup again.")
+        sys.exit(
+            f"Access check failed: {type(e).__name__}: {e}\nFix the cause (network, Tasks API enabled?) and run setup again."
+        )
     print(f"Access works ({len(tasks)} open tasks).")
     _install()
 
@@ -117,7 +119,9 @@ def uninstall(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="gtasks-sync", description="Sync Google Tasks to local files for Raycast.")
     commands = parser.add_subparsers(dest="command", required=True)
-    setup_cmd = commands.add_parser("setup", help="authorize with Google, save the secrets to Keychain, install the service")
+    setup_cmd = commands.add_parser(
+        "setup", help="authorize with Google, save the secrets to Keychain, install the service"
+    )
     setup_cmd.add_argument(
         "--client-secret", type=Path, required=True, help="client_secret.json of a Desktop app OAuth client"
     )

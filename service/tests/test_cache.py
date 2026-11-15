@@ -62,7 +62,9 @@ def test_read_unusable_cache_gives_nothing(tmp_path: Path, content: str | None) 
 
 def test_a_bad_field_never_loses_the_tasks(tmp_path: Path) -> None:
     path = tmp_path / "cache.json"
-    path.write_text('{"version": 1, "synced_at": "bad", "last_attempt_at": "2026-11-15T09:00:00.000Z", "error": 3, "tasks": [{"id": "t1"}]}')
+    path.write_text(
+        '{"version": 1, "synced_at": "bad", "last_attempt_at": "2026-11-15T09:00:00.000Z", "error": 3, "tasks": [{"id": "t1"}]}'
+    )
     assert read_cache(path) == ([{"id": "t1"}], Status(synced_at=None, last_attempt_at=NOW, error=None))
     path.write_text('{"version": 1, "tasks": {}}')
     assert read_cache(path) == ([], None)

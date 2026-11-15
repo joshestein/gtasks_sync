@@ -91,7 +91,9 @@ class FakeApi:
     def list_completed_since(self, since: datetime) -> list[Task]:
         self._check("list_completed_since")
         self.calls.append(("list_completed_since", since))
-        return [t for t in self.live() if t["status"] == "completed" and datetime.fromisoformat(t["completed"]) >= since]
+        return [
+            t for t in self.live() if t["status"] == "completed" and datetime.fromisoformat(t["completed"]) >= since
+        ]
 
     def live(self) -> list[Task]:
         return [t for t in self.tasks.values() if not t.get("deleted")]

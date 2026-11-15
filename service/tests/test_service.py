@@ -116,9 +116,7 @@ def test_failed_fetch_keeps_ops_and_old_tasks_then_recovers(
     assert list_op_files(queue_dir / "accepted") == []
 
 
-def test_error_mid_queue_keeps_the_rest(
-    syncer: Syncer, api: FakeApi, write_op: WriteOp, queue_dir: Path
-) -> None:
+def test_error_mid_queue_keeps_the_rest(syncer: Syncer, api: FakeApi, write_op: WriteOp, queue_dir: Path) -> None:
     task = api.add(title="milk")
     write_op("complete", task=task["id"])
     write_op("delete", task=task["id"])
@@ -292,9 +290,7 @@ def test_fetch_leaves_out_tasks_completed_before_the_window(api: FakeApi) -> Non
     assert [t["title"] for t in fetch(api, NOW)] == ["recent"]
 
 
-def test_a_bad_task_from_the_api_is_an_error_not_a_crash(
-    syncer: Syncer, api: FakeApi, cache_file: Path
-) -> None:
+def test_a_bad_task_from_the_api_is_an_error_not_a_crash(syncer: Syncer, api: FakeApi, cache_file: Path) -> None:
     api.add(title="milk")
     syncer.round()
     api.list_open = lambda: [{"title": "no id"}]
