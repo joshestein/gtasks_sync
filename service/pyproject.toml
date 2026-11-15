@@ -1,0 +1,23 @@
+[project]
+name = "gtasks-sync"
+version = "0.1.0"
+description = "Background sync between Google Tasks and local files for the Raycast extension"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "google-auth>=2.40",
+    "google-auth-oauthlib>=1.2",
+    "requests>=2.32",
+    "watchdog>=6",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
