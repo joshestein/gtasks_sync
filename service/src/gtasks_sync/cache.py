@@ -70,7 +70,6 @@ def read_cached_tasks(path: Path) -> list[dict[str, Any]]:
 
 def write_cache(path: Path, tasks: list[dict[str, Any]], status: Status) -> None:
     error = status.error
-    # Not durable: a lost or old cache is written again next round.
     write_json_atomic(
         path,
         {
@@ -80,5 +79,4 @@ def write_cache(path: Path, tasks: list[dict[str, Any]], status: Status) -> None
             "error": {"kind": error.kind, "message": error.message} if error else None,
             "tasks": tasks,
         },
-        durable=False,
     )
