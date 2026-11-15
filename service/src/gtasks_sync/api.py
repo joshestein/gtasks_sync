@@ -143,7 +143,11 @@ class HttpTasksApi:
         return self.call("PATCH", task_id, body=body)
 
     def delete(self, task_id: str) -> None:
-        self.call("DELETE", task_id)
+        # A second delete succeeds. A purged task gives 404.
+        try:
+            self.call("DELETE", task_id)
+        except NotFound:
+            pass
 
     def _list(self, params: dict[str, str]) -> list[Task]:
         """All pages. Without showDeleted, the API never returns deleted tasks."""
