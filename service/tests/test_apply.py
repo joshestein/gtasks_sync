@@ -17,8 +17,8 @@ Run = Callable[..., list[Path]]
 
 @pytest.fixture
 def run(api: FakeApi, state: State, queue_dir: Path) -> Run:
-    def run(tasks: list[dict[str, Any]] | None = None) -> list[Path]:
-        return apply_queue(api, state, queue_dir, tasks or [], NOW)
+    def run() -> list[Path]:
+        return apply_queue(api, state, queue_dir, NOW)
 
     return run
 
@@ -149,34 +149,19 @@ def test_update_sets_due(api: FakeApi, write_op: WriteOp, run: Run) -> None:
     assert task["due"] == "2026-12-01T00:00:00.000Z"
 
 
-def test_complete_also_completes_open_subtasks(api: FakeApi, write_op: WriteOp, run: Run) -> None:
-    parent = api.add(title="p")
-    open_sub = api.add(title="a", parent=parent["id"])
-    done_sub = api.add(title="b", parent=parent["id"], status="completed")
-    other = api.add(title="c")
-    write_op("complete", task=parent["id"])
-
-    run([parent, open_sub, done_sub, other])
-
-    assert [t["status"] for t in (parent, open_sub, other)] == ["completed", "completed", "needsAction"]
-    assert ("patch", done_sub["id"], {"status": "completed"}) not in api.calls
+def test_complete_sends_one_patch(api: FakeApi, write_op: WriteOp, run: Run) -> None:
+    """The API completes the subtasks itself (checked against the real server)."""
+    task = api.add(title="p")
+    write_op("complete", task=task["id"])
+    run()
+    assert api.calls == [("patch", task["id"], {"status": "completed"})]
 
 
-def test_complete_skips_a_subtask_deleted_elsewhere(api: FakeApi, write_op: WriteOp, run: Run) -> None:
-    parent = api.add(title="p")
-    sub = api.add(title="a", parent=parent["id"], deleted=True)
-    path = write_op("complete", task=parent["id"])
-    assert run([parent, sub]) == [path]
-    assert parent["status"] == "completed"
-
-
-def test_uncomplete_reopens_only_the_task(api: FakeApi, write_op: WriteOp, run: Run) -> None:
-    parent = api.add(title="p", status="completed", completed="2026-11-15T09:00:00.000Z")
-    sub = api.add(title="a", parent=parent["id"], status="completed")
-    write_op("uncomplete", task=parent["id"])
-    run([parent, sub])
-    assert (parent["status"], parent["completed"]) == ("needsAction", None)
-    assert sub["status"] == "completed"
+def test_uncomplete(api: FakeApi, write_op: WriteOp, run: Run) -> None:
+    task = api.add(title="p", status="completed")
+    write_op("uncomplete", task=task["id"])
+    run()
+    assert api.calls == [("patch", task["id"], {"status": "needsAction"})]
 
 
 def test_delete(api: FakeApi, write_op: WriteOp, run: Run) -> None:
@@ -195,6 +180,19 @@ def test_op_on_task_deleted_elsewhere_is_skipped(
 ) -> None:
     task = api.add(title="milk", deleted=True)
     path = write_op(kind, task=task["id"], **fields)
+    assert run() == [path]
+    assert failed_names(queue_dir) == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "fields"),
+    [("update", {"fields": {"title": "x"}}), ("complete", {}), ("uncomplete", {}), ("delete", {})],
+)
+def test_op_on_missing_task_is_skipped(
+    write_op: WriteOp, queue_dir: Path, run: Run, kind: str, fields: dict[str, Any]
+) -> None:
+    """404: the task is gone for good."""
+    path = write_op(kind, task="gone", **fields)
     assert run() == [path]
     assert failed_names(queue_dir) == []
 
@@ -275,7 +273,7 @@ def test_applied_ops_are_not_sent_again(api: FakeApi, state_path: Path, queue_di
     run()
     api.calls.clear()
 
-    apply_queue(api, load_state(state_path), queue_dir, [], NOW)
+    apply_queue(api, load_state(state_path), queue_dir, NOW)
 
     assert api.calls == []
 
