@@ -51,14 +51,36 @@ def serialize_tasks(tasks: Iterable[Task], state: State) -> list[dict[str, Any]]
     return [task_to_dict(t, local_ids.get(t["id"])) for t in tasks]
 
 
-def read_cached_tasks(path: Path) -> list[dict[str, Any]]:
-    """The tasks in the current cache.json, or [] if there is no usable file."""
+def _time(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _error(value: Any) -> SyncError | None:
+    if isinstance(value, dict) and value.get("kind") in ("auth", "network", "other"):
+        return SyncError(value["kind"], str(value.get("message", "")))
+    return None
+
+
+def read_cache(path: Path) -> tuple[list[dict[str, Any]], Status | None]:
+    """(tasks, status) from the current cache.json. ([], None) if there is no usable file.
+
+    Each part is read on its own, so a bad field never loses the tasks: the service keeps them on a failed round.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        tasks = data["tasks"] if data["version"] == CACHE_VERSION else []
-    except (OSError, ValueError, TypeError, KeyError):
-        return []
-    return tasks if isinstance(tasks, list) else []
+    except (OSError, ValueError):
+        return [], None
+    if not isinstance(data, dict) or data.get("version") != CACHE_VERSION:
+        return [], None
+    tasks = data.get("tasks")
+    last_attempt_at = _time(data.get("last_attempt_at"))
+    status = (
+        Status(_time(data.get("synced_at")), last_attempt_at, _error(data.get("error"))) if last_attempt_at else None
+    )
+    return (tasks if isinstance(tasks, list) else []), status
 
 
 def write_cache(path: Path, tasks: list[dict[str, Any]], status: Status) -> None:
