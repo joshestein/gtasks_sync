@@ -1,2 +1,6 @@
 __pycache__
 .venv
+.pytest_cache
+
+# OAuth client file from GCP. Its secret is also stored in Keychain by setup.
+client_secret*.json
