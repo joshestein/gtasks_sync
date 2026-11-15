@@ -141,7 +141,13 @@ class HttpTasksApi:
             raise Transient(f"{type(e).__name__}: {e}") from e
         if response.status_code >= 300:
             raise _error(response)
-        return response.json() if response.content else None
+        if not response.content:
+            return None
+        try:
+            return response.json()
+        except ValueError as e:
+            # For example a captive portal that answers 200 with HTML.
+            raise Transient(f"response is not JSON: {e}") from e
 
     def insert(self, body: Task) -> Task:
         return self.call("POST", body=body)
