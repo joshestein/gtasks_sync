@@ -24,6 +24,8 @@
 
 **Failed op**: An op that can never succeed, for example a bad file. It leaves the queue, does not block later ops, and stays visible until a later change to its task replaces it.
 
+**Inbox**: Captures from other programs, one task for each file. Each becomes a `create` op at the start of a round.
+
 **Pending task**: A task with ops in the Queue or Accepted ops. The Mac shows the result of those ops at once.
 
 **Cache**: The last copy of the task list from Google: all open tasks, and tasks completed in the last 7 days.
