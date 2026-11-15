@@ -9,7 +9,7 @@ export function escapeMarkdown(text: string): string {
     .split("\n")
     .map((line) =>
       line
-        .replace(/[\\`*_{}[\]()#+\-.!|<>~=]/g, "\\$&")
+        .replace(/[\\`*_{}[\]()#+\-.!|<>~=&]/g, "\\$&")
         .replace(/^[ \t]+/, (indent) => indent.replace(/ /g, " ").replace(/\t/g, " ".repeat(4))),
     )
     .join("  \n");
