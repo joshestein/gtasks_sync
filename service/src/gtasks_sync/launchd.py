@@ -46,6 +46,6 @@ def install(program: list[str], stdio_log: Path) -> None:
 
 
 def uninstall() -> None:
-    if is_loaded():
-        subprocess.run(["launchctl", "bootout", f"{_domain()}/{LABEL}"], capture_output=True)
+    # A bootout of an agent that is not loaded fails with no effect.
+    subprocess.run(["launchctl", "bootout", f"{_domain()}/{LABEL}"], capture_output=True)
     PLIST_FILE.unlink(missing_ok=True)

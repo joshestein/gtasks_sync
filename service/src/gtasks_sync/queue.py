@@ -62,9 +62,9 @@ def _check_notes(value: Any) -> str:
 def _check_due(value: Any) -> str | None:
     if value is None:
         return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise InvalidOp(f"bad due date: {value!r}")
     try:
-        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-            raise ValueError
         date.fromisoformat(value)
     except ValueError as e:
         raise InvalidOp(f"bad due date: {value!r}") from e

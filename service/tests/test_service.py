@@ -1,18 +1,17 @@
 import json
 import time
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from watchdog.events import FileCreatedEvent, FileModifiedEvent, FileMovedEvent
 
-from gtasks_sync.api import AuthError, Transient
+from gtasks_sync import service
+from gtasks_sync.api import AuthError, Transient, iso
 from gtasks_sync.cache import SyncError, read_cache
 from gtasks_sync.keychain import KeychainError
 from gtasks_sync.queue import SYNC_NOW_FILE, Queue, list_op_files
-from gtasks_sync import service
-from gtasks_sync.api import iso
 from gtasks_sync.service import (
     COMPLETED_WINDOW,
     MAX_BACKOFF_SECONDS,
@@ -41,13 +40,24 @@ def opens() -> list[int]:
     return []
 
 
+MakeSyncer = Callable[..., Syncer]
+
+
 @pytest.fixture
-def syncer(api: FakeApi, state: State, queue_dir: Path, cache_file: Path, opens: list[int]) -> Syncer:
-    def open_api() -> FakeApi:
+def make_syncer(api: FakeApi, state: State, queue: Queue, cache_file: Path, opens: list[int]) -> MakeSyncer:
+    def open_fake() -> FakeApi:
         opens.append(1)
         return api
 
-    return Syncer(open_api=open_api, state=state, queue=Queue(queue_dir), cache_file=cache_file, now=lambda: NOW)
+    def make(open_api: Callable[[], FakeApi] = open_fake, now: datetime = NOW) -> Syncer:
+        return Syncer(open_api=open_api, state=state, queue=queue, cache_file=cache_file, now=lambda: now)
+
+    return make
+
+
+@pytest.fixture
+def syncer(make_syncer: MakeSyncer) -> Syncer:
+    return make_syncer()
 
 
 def cached(cache_file: Path) -> dict:
@@ -80,7 +90,7 @@ def test_round_applies_fetches_writes_cache_and_removes_ops(
 
 
 def test_failed_fetch_keeps_ops_and_old_tasks_then_recovers(
-    syncer: Syncer, api: FakeApi, state: State, write_op: WriteOp, queue_dir: Path, cache_file: Path
+    syncer: Syncer, api: FakeApi, write_op: WriteOp, queue_dir: Path, cache_file: Path
 ) -> None:
     api.add(title="old")
     syncer.round()
@@ -134,12 +144,11 @@ def test_auth_error_opens_the_api_again_next_round(syncer: Syncer, api: FakeApi,
     assert len(opens) == 2
 
 
-def test_keychain_error_is_an_auth_error(state: State, queue_dir: Path, cache_file: Path) -> None:
+def test_keychain_error_is_an_auth_error(make_syncer: MakeSyncer) -> None:
     def open_api() -> FakeApi:
         raise KeychainError("no secrets: run `gtasks-sync setup`")
 
-    syncer = Syncer(open_api=open_api, state=state, queue=Queue(queue_dir), cache_file=cache_file, now=lambda: NOW)
-    error = syncer.round()
+    error = make_syncer(open_api=open_api).round()
     assert error is not None and error.kind == "auth"
 
 
@@ -214,14 +223,12 @@ def test_after_a_failure_only_sync_now_ends_the_wait() -> None:
 
 
 def test_restart_keeps_synced_at_and_tasks_on_a_failed_round(
-    syncer: Syncer, api: FakeApi, state: State, queue_dir: Path, cache_file: Path
+    syncer: Syncer, make_syncer: MakeSyncer, api: FakeApi, cache_file: Path
 ) -> None:
     api.add(title="milk")
     syncer.round()
     later = NOW + timedelta(minutes=5)
-    restarted = Syncer(
-        open_api=lambda: api, state=state, queue=Queue(queue_dir), cache_file=cache_file, now=lambda: later
-    )
+    restarted = make_syncer(now=later)
     assert restarted.synced_at == NOW
 
     api.fail["list_open"] = Transient("down")

@@ -5,10 +5,10 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from gtasks_sync import launchd
 from gtasks_sync.api import ApiError
 from gtasks_sync.auth import authorize, open_api
 from gtasks_sync.cache import read_cache
-from gtasks_sync import launchd
 from gtasks_sync.keychain import KeychainError, delete_secrets, read_secrets, save_secrets
 from gtasks_sync.paths import APP_DIR, CACHE_FILE, LAUNCHD_LOG_FILE, LOG_FILE, QUEUE_DIR, STATE_FILE
 from gtasks_sync.queue import Queue, list_op_files

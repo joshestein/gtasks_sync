@@ -63,8 +63,8 @@ def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
     task_id = state.resolve(op.task)
     if task_id is None:
         if op.kind == "delete":
-            # Its create failed, so the task never reached Google. This applied delete
-            # also removes the failed create (done_files), so a failed capture can be dismissed.
+            # Its create failed, so the task never reached Google. Once accepted, this delete
+            # also removes the failed create (Queue.finish), so a failed capture can be dismissed.
             return
         raise UnmappedLocalId(op.task)
     match op.kind:
@@ -91,7 +91,7 @@ def apply_queue(api: TasksApi, state: State, queue: Queue, now: datetime) -> Non
         except OpFailed as e:
             log.warning("failed op %s: %s: %s", path.name, type(e).__name__, e)
             queue.fail(path)
-            if op.kind == "create" and state.insert_attempts.pop(op.task, None):
+            if op.kind == "create" and state.drop_attempt(op.task):
                 state.save()
         else:
             queue.accept(path)

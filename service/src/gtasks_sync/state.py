@@ -1,4 +1,4 @@
-"""state.json: the id map, insert attempt marks, and applied ops. Written and read only by the service."""
+"""state.json: the id map and insert attempt marks. Written and read only by the service."""
 
 import json
 import logging
@@ -35,6 +35,10 @@ class State:
     def map(self, local_id: str, task_id: str) -> None:
         self.id_map[local_id] = task_id
         self.insert_attempts.pop(local_id, None)
+
+    def drop_attempt(self, local_id: str) -> bool:
+        """Forget the mark of a create that failed. Return True if there was one."""
+        return self.insert_attempts.pop(local_id, None) is not None
 
     def local_ids(self) -> dict[str, str]:
         """Task id -> local id."""

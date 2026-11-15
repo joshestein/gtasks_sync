@@ -17,7 +17,7 @@ from watchdog.observers.api import BaseObserver
 from gtasks_sync.api import AuthError, Task, TasksApi, Transient
 from gtasks_sync.apply import apply_queue
 from gtasks_sync.cache import Status, SyncError, read_cache, serialize_tasks, write_cache
-from gtasks_sync.queue import SYNC_NOW_FILE, Queue
+from gtasks_sync.queue import OP_FILE_RE, SYNC_NOW_FILE, Queue
 from gtasks_sync.state import State
 
 log = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class Syncer:
     queue: Queue
     cache_file: Path
     now: Callable[[], datetime] = _utc_now
-    api: SyncApi | None = None
+    api: SyncApi | None = field(default=None, init=False)
     # From the last cache, so a restart keeps the time of the last good sync.
     synced_at: datetime | None = field(init=False)
 
@@ -142,7 +142,7 @@ class QueueHandler(FileSystemEventHandler):
             if event.event_type in ("created", "modified", "moved") and path.exists():
                 self.wake.sync_now.set()
                 self.wake.op.set()
-        elif event.event_type in ("created", "moved") and path.suffix == ".json" and not path.name.startswith("."):
+        elif event.event_type in ("created", "moved") and OP_FILE_RE.fullmatch(path.name):
             self.wake.op.set()
 
 

@@ -58,14 +58,14 @@ def test_install_writes_the_plist_and_loads_it(plist: Path, monkeypatch: pytest.
         "StandardOutPath": "/logs/launchd.log",
         "StandardErrorPath": "/logs/launchd.log",
     }
-    assert fake.calls == ["print", "bootstrap"]
+    assert fake.calls == ["bootout", "bootstrap"]
     assert launchd.is_loaded()
 
 
 def test_install_replaces_a_loaded_agent(plist: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = use(FakeLaunchctl(loaded=True), monkeypatch)
     launchd.install(["x"], Path("/log"))
-    assert fake.calls == ["print", "bootout", "bootstrap"]
+    assert fake.calls == ["bootout", "bootstrap"]
 
 
 def test_install_retries_bootstrap_while_bootout_finishes(plist: Path, monkeypatch: pytest.MonkeyPatch) -> None:

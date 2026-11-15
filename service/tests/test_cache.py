@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from gtasks_sync.cache import SyncError, Status, read_cache, serialize_tasks, write_cache
+from gtasks_sync.cache import Status, SyncError, read_cache, serialize_tasks, write_cache
 from gtasks_sync.state import State
 
 from .conftest import LOCAL_ID, NOW
