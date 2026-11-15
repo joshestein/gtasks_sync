@@ -78,11 +78,9 @@ def _from_json(path: Path, raw: dict[str, Any]) -> State:
         raise ValueError(f"unknown state version {raw['version']!r}")
     return State(
         path=path,
-        id_map={
-            k: Mapped(str(v["task_id"]), datetime.fromisoformat(v["at"])) for k, v in raw["id_map"].items()
-        },
+        id_map={k: Mapped(v["task_id"], datetime.fromisoformat(v["at"])) for k, v in raw["id_map"].items()},
         insert_attempts={k: datetime.fromisoformat(v) for k, v in raw["insert_attempts"].items()},
-        applied={str(k): str(v) for k, v in raw["applied"].items()},
+        applied=raw["applied"],
     )
 
 
