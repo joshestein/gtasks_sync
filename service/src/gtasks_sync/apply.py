@@ -1,8 +1,6 @@
 """Apply queued ops to Google Tasks."""
 
 import logging
-from collections.abc import Sequence
-from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -67,11 +65,8 @@ def _create(api: TasksApi, state: State, op: Op, now: datetime) -> None:
     state.map(local_id, created["id"], now)
 
 
-def apply_op(api: TasksApi, state: State, op: Op, tasks: Sequence[Task], now: datetime) -> None:
-    """Apply one op. Every op is safe to send again.
-
-    tasks: the last fetched tasks, to find the open subtasks of a task to complete.
-    """
+def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
+    """Apply one op. Every op is safe to send again. An op on a task deleted elsewhere has no effect."""
     if op.kind == "create":
         _create(api, state, op, now)
         return
@@ -79,24 +74,24 @@ def apply_op(api: TasksApi, state: State, op: Op, tasks: Sequence[Task], now: da
     task_id = state.resolve(op.task)
     if task_id is None:
         raise UnmappedLocalId(op.task)
+    result: Task | None = None
     try:
         match op.kind:
             case "update":
-                api.patch(task_id, _patch_body(op.fields))
+                result = api.patch(task_id, _patch_body(op.fields))
             case "complete":
-                api.patch(task_id, {"status": "completed"})
-                # The Google apps complete the subtasks with the parent. The API does not.
-                for sub in tasks:
-                    if sub.get("parent") == task_id and sub.get("status") == "needsAction":
-                        with suppress(NotFound):
-                            api.patch(sub["id"], {"status": "completed"})
+                # The API also completes the subtasks, as the Google apps do.
+                result = api.patch(task_id, {"status": "completed"})
             case "uncomplete":
-                api.patch(task_id, {"status": "needsAction", "completed": None})
+                result = api.patch(task_id, {"status": "needsAction"})
             case "delete":
-                api.delete(task_id)
+                api.delete(task_id)  # A second delete is not an error.
+                return
     except NotFound:
-        # Deleted elsewhere, which is most likely on purpose.
-        log.info("%s skipped: task %s is gone", op.kind, task_id)
+        pass
+    # A patch on a deleted task succeeds and returns it with deleted: true. It stays deleted.
+    if result is None or result.get("deleted"):
+        log.info("%s had no effect: task %s was deleted elsewhere", op.kind, task_id)
 
 
 def done_files(queue_dir: Path, state: State) -> list[Path]:
@@ -119,7 +114,7 @@ def done_files(queue_dir: Path, state: State) -> list[Path]:
     return applied + stale
 
 
-def apply_queue(api: TasksApi, state: State, queue_dir: Path, tasks: Sequence[Task], now: datetime) -> list[Path]:
+def apply_queue(api: TasksApi, state: State, queue_dir: Path, now: datetime) -> list[Path]:
     """Apply the queued ops that are not applied yet, in order. Return done_files().
 
     An op that can never succeed moves to failed/ and never blocks later ops.
@@ -130,7 +125,7 @@ def apply_queue(api: TasksApi, state: State, queue_dir: Path, tasks: Sequence[Ta
             continue
         try:
             op = parse_op(path)
-            apply_op(api, state, op, tasks, now)
+            apply_op(api, state, op, now)
         except OpFailed as e:
             log.warning("failed op %s: %s: %s", path.name, type(e).__name__, e)
             move_to_failed(path)
