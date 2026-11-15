@@ -23,13 +23,14 @@ At sign-in, Google shows "unverified app". Click **Advanced**, then **Go to … 
 
 - **New Task**: title, optional due date and notes. Submit, and the window closes at once.
 - **Tasks**: open tasks by due date, then tasks completed in the last 7 days. Return completes or reopens. ⌘E edit, ⌘N new, ⌘O open in Google Tasks, ⌃X delete, ⌘D details, ⌘R sync now.
+- **Other programs**: write `{"text": "buy milk"}` to `inbox/<name>.json` in the data folder (write `<name>.json.part`, then rename it), then touch `queue/sync-now`. Each file becomes a new task. A bad file goes to `inbox/failed/` ([ADR 0004](docs/adr/0004-inbox-for-captures-from-other-programs.md)).
 
 A clock on a task means Google has not received the change yet. A red mark means the change failed: see the log.
 
 ## Commands
 
 ```sh
-uv run gtasks-sync status            # agent, last sync, error, queued / accepted / failed ops
+uv run gtasks-sync status            # agent, last sync, error, queued / accepted / failed ops, inbox files
 uv run gtasks-sync install           # reload the agent, for example after a code change
 uv run gtasks-sync uninstall [--purge]   # remove the agent; --purge also removes the Keychain item and local data
 ```
