@@ -1,14 +1,18 @@
 """The op queue: one JSON file per op in the queue directory (ADR 0002)."""
 
 import json
+import logging
 import os
 import re
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
 from gtasks_sync.errors import OpFailed
+
+log = logging.getLogger(__name__)
 
 OpKind = Literal["create", "update", "complete", "uncomplete", "delete"]
 
@@ -106,16 +110,48 @@ def parse_op(path: Path) -> Op:
     return Op(kind=cast(OpKind, kind), task=task, fields=fields)
 
 
-def failed_dir(queue_dir: Path) -> Path:
-    return queue_dir / "failed"
-
-
-def move_to_failed(path: Path) -> None:
-    dest = failed_dir(path.parent)
+def _move(path: Path, dest: Path) -> None:
     dest.mkdir(exist_ok=True)
     os.replace(path, dest / path.name)
 
 
-def remove_ops(paths: list[Path]) -> None:
-    for p in paths:
-        p.unlink(missing_ok=True)
+class Queue:
+    def __init__(self, dir: Path) -> None:
+        self.dir = dir
+        self.accepted_dir = dir / "accepted"
+        self.failed_dir = dir / "failed"
+
+    def pending(self) -> Iterator[tuple[Path, Op]]:
+        """Ops in the Queue, oldest first. A file that cannot be read becomes a Failed op here."""
+        for path in list_op_files(self.dir):
+            try:
+                op = parse_op(path)
+            except InvalidOp as e:
+                log.warning("failed op %s: %s", path.name, e)
+                self.fail(path)
+                continue
+            yield path, op
+
+    def accept(self, path: Path) -> None:
+        _move(path, self.accepted_dir)
+
+    def fail(self, path: Path) -> None:
+        _move(path, self.failed_dir)
+
+    def finish(self, task_key: Callable[[str], str]) -> list[Path]:
+        """Call once the Cache shows the Accepted ops. Remove them, and each Failed op older than an
+        Accepted op for the same task: without that, a Failed op would stay on the Mac for good.
+        Return the removed files."""
+        accepted = list_op_files(self.accepted_dir)
+        newest = {key: p.name for p in accepted if (key := _key(p, task_key))}  # Name order: the last wins.
+        stale = [p for p in list_op_files(self.failed_dir) if p.name < newest.get(_key(p, task_key) or "", "")]
+        for path in [*accepted, *stale]:
+            path.unlink(missing_ok=True)
+        return [*accepted, *stale]
+
+
+def _key(path: Path, task_key: Callable[[str], str]) -> str | None:
+    try:
+        return task_key(parse_op(path).task)
+    except InvalidOp:
+        return None
