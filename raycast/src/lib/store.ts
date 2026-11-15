@@ -101,29 +101,69 @@ function opNames(dir: string): string[] {
   }
 }
 
-/** Every op file in the three stage directories, in name order. Unreadable files are skipped. */
+const isString = (v: unknown): v is string => typeof v === "string";
+const isDue = (v: unknown) => v === null || (isString(v) && /^\d{4}-\d{2}-\d{2}$/.test(v));
+
+/** The op in a file's JSON, or null if it does not have the shape the overlay needs. */
+function toOp(raw: unknown): Op | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const op = raw as Record<string, unknown>;
+  if (!isString(op.task)) return null;
+  switch (op.op) {
+    case "create":
+      return isString(op.title) && op.title.trim() && isString(op.notes) && isDue(op.due) ? (op as Op) : null;
+    case "update": {
+      const fields = op.fields as Record<string, unknown> | null;
+      if (typeof fields !== "object" || fields === null) return null;
+      const ok =
+        (fields.title === undefined || (isString(fields.title) && fields.title.trim())) &&
+        (fields.notes === undefined || isString(fields.notes)) &&
+        (fields.due === undefined || isDue(fields.due));
+      return ok ? (op as Op) : null;
+    }
+    case "complete":
+    case "uncomplete":
+    case "delete":
+      return op as Op;
+    default:
+      return null;
+  }
+}
+
+/** A time from a file name, or null if it is not a valid date. */
+function nameTime(name: string): number | null {
+  const at = Number(OP_FILE.exec(name)?.[1]);
+  return Number.isSafeInteger(at) && at <= 8.64e15 ? at : null;
+}
+
+/**
+ * Every op file in the three stage directories, in name order. A file that cannot be read or has a bad shape
+ * is skipped: the service moves such a file to failed/ and keeps it there, so it must never break the list.
+ */
 export function readOps(appDir = APP_DIR): StagedOp[] {
   return STAGES.flatMap(([sub, state]) => {
     const dir = join(appDir, "queue", sub);
     return opNames(dir).flatMap((name) => {
+      const at = nameTime(name);
+      let op: Op | null = null;
       try {
-        const op = JSON.parse(readFileSync(join(dir, name), "utf8")) as Op;
-        return [{ name, at: Number(OP_FILE.exec(name)?.[1]), op, state }];
+        op = toOp(JSON.parse(readFileSync(join(dir, name), "utf8")));
       } catch {
-        return [];
+        // Unreadable: skip.
       }
+      return op && at !== null ? [{ name, at, op, state }] : [];
     });
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
  * Write one op file: temp file, then rename, so the service never reads a partial op (ADR 0002).
- * The time in the name is never before the newest pending op, so a clock step back cannot reorder ops.
+ * The time in the name is after every op on the Mac, so a clock step back cannot reorder ops.
  */
 export function writeOp(op: Op, appDir = APP_DIR, now = Date.now()): void {
   const dir = join(appDir, "queue");
   mkdirSync(dir, { recursive: true });
-  const times = [...opNames(dir), ...opNames(join(dir, "accepted"))].map((n) => Number(OP_FILE.exec(n)?.[1]));
+  const times = STAGES.flatMap(([sub]) => opNames(join(dir, sub)).map(nameTime)).filter((t) => t !== null);
   const name = `${Math.max(now, ...times.map((t) => t + 1))}-${randomBytes(4).toString("hex")}.json`;
   const tmp = join(dir, `.${name}.tmp`);
   writeFileSync(tmp, JSON.stringify(op), { mode: 0o600, flush: true });
@@ -142,13 +182,17 @@ export function createTask(values: TaskValues, appDir = APP_DIR): void {
   writeOp({ op: "create", task: mintLocalId(), ...values, title: values.title.trim() }, appDir);
 }
 
-/** Write an update with only the changed fields. Return false if nothing changed, so no op is written. */
+/**
+ * Write an update with only the changed fields. Return false if nothing changed, so no op is written.
+ * A failed task shows the failed edit, and the new op replaces it, so then every field is sent: a save retries it.
+ */
 export function updateTask(task: Task, edited: TaskValues, appDir = APP_DIR): boolean {
+  const all = task.state === "failed";
   const fields: Fields = {};
   const title = edited.title.trim();
-  if (title !== task.title) fields.title = title;
-  if (edited.notes !== task.notes) fields.notes = edited.notes;
-  if (edited.due !== task.due) fields.due = edited.due;
+  if (all || title !== task.title) fields.title = title;
+  if (all || edited.notes !== task.notes) fields.notes = edited.notes;
+  if (all || edited.due !== task.due) fields.due = edited.due;
   if (Object.keys(fields).length === 0) return false;
   writeOp({ op: "update", task: task.id, fields }, appDir);
   return true;

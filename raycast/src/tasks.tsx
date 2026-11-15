@@ -24,11 +24,11 @@ import {
   LOG_FILE,
   requestSync,
   setCompleted,
-  subtasks,
   syncWarning,
   Task,
   updateTask,
 } from "./lib/store";
+import { tryWrite } from "./lib/toast";
 import { TaskForm } from "./task-form";
 
 const RELOAD_MS = 3000;
@@ -42,8 +42,10 @@ export default function Command() {
   const [{ tasks, warning }, setData] = useState(load);
   const [query, setQuery] = useState("");
   const [showDetail, setShowDetail] = useState(false);
+  const [today, setToday] = useState(() => toDue(new Date()));
   // Set new state only when something changed, so the list does not jump.
-  const lastJson = useRef("");
+  const lastJson = useRef<string>(null);
+  lastJson.current ??= JSON.stringify({ tasks, warning });
   const reload = useCallback(() => {
     const next = load();
     const json = JSON.stringify(next);
@@ -53,18 +55,27 @@ export default function Command() {
     }
   }, []);
   // The service changes the files in the background: poll so pending states and the sync warning stay current.
+  // The poll also moves `today` on at midnight, for the Today and Tomorrow labels and the overdue color.
   useEffect(() => {
-    const timer = setInterval(reload, RELOAD_MS);
+    const timer = setInterval(() => {
+      reload();
+      setToday(toDue(new Date()));
+    }, RELOAD_MS);
     return () => clearInterval(timer);
   }, [reload]);
   const { open, completed } = useMemo(() => arrange(tasks, query), [tasks, query]);
-  const today = toDue(new Date());
+  // One pass for every row's subtask count, which the delete alert uses.
+  const subtaskCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of tasks) if (t.parent) counts.set(t.parent, (counts.get(t.parent) ?? 0) + 1);
+    return counts;
+  }, [tasks]);
   const newTask = <NewTaskAction title={query.trim()} reload={reload} />;
   const item = (row: Row) => (
     <TaskItem
       key={row.task.id}
       row={row}
-      subtaskCount={subtasks(tasks, row.task).length}
+      subtaskCount={subtaskCounts.get(row.task.id) ?? 0}
       today={today}
       reload={reload}
       newTask={newTask}
@@ -133,7 +144,7 @@ function TaskItem({ row, subtaskCount, today, reload, newTask, showDetail, toggl
   const done = task.status === "completed";
 
   async function toggleCompleted() {
-    setCompleted(task, !done);
+    if (!(await tryWrite(done ? "reopen the task" : "complete the task", () => setCompleted(task, !done)))) return;
     reload();
     await showToast({ style: Toast.Style.Success, title: done ? "Reopened" : "Completed" });
   }
@@ -144,8 +155,7 @@ function TaskItem({ row, subtaskCount, today, reload, newTask, showDetail, toggl
       message: subtaskCount ? `This also deletes ${subtaskCount} subtask${subtaskCount === 1 ? "" : "s"}.` : undefined,
       primaryAction: { title: "Delete", style: Alert.ActionStyle.Destructive },
     });
-    if (!confirmed) return;
-    deleteTask(task);
+    if (!confirmed || !(await tryWrite("delete the task", () => deleteTask(task)))) return;
     reload();
   }
 
@@ -210,13 +220,9 @@ function TaskItem({ row, subtaskCount, today, reload, newTask, showDetail, toggl
 /** The list already polls the files, so this asks the service for a round. The poll shows the result. */
 function SyncNowAction() {
   async function syncNow() {
-    try {
-      requestSync();
-    } catch (error) {
-      await showToast({ style: Toast.Style.Failure, title: "Could not request sync", message: String(error) });
-      return;
+    if (await tryWrite("request a sync", () => requestSync())) {
+      await showToast({ style: Toast.Style.Success, title: "Sync requested" });
     }
-    await showToast({ style: Toast.Style.Success, title: "Sync requested" });
   }
   return (
     <Action
@@ -249,8 +255,11 @@ function TaskEditor({ task, initialTitle = "", onSaved }: { task?: Task; initial
       initial={task ?? { title: initialTitle, due: null, notes: "" }}
       onSubmit={async (values) => {
         let changed = true;
-        if (task) changed = updateTask(task, values);
-        else createTask(values);
+        const saved = await tryWrite("save the task", () => {
+          if (task) changed = updateTask(task, values);
+          else createTask(values);
+        });
+        if (!saved) return; // Stay in the form, so nothing typed is lost.
         onSaved();
         pop();
         await showToast(

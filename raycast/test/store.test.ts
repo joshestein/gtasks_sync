@@ -78,6 +78,22 @@ describe("files", () => {
     expect(readOps(join(dir, "missing"))).toEqual([]);
   });
 
+  it("names a new op after a failed op too", () => {
+    put("failed", "5000-aaaaaaaa.json", { op: "delete", task: "t1" });
+    writeOp({ op: "delete", task: "t2" }, dir, 1000);
+    expect(readdirSync(queue()).filter((n) => OP_FILE.test(n))[0]).toMatch(/^5001-/);
+  });
+
+  it("skips ops with a bad shape, so a bad file in failed/ cannot break the list", () => {
+    put("failed", "1-aa.json", "null");
+    put("failed", "2-bb.json", { op: "create", task: LOCAL, notes: "", due: null }); // No title.
+    put("failed", "3-cc.json", { op: "update", task: "t1", fields: { due: "tomorrow" } });
+    put("failed", "4-dd.json", { op: "archive", task: "t1" });
+    put("failed", "99999999999999999-ee.json", { op: "delete", task: "t1" }); // Not a valid date.
+    put("failed", "5-ff.json", { op: "update", task: "t1", fields: { title: "ok", due: null } });
+    expect(readOps(dir).map((s) => s.name)).toEqual(["5-ff.json"]);
+  });
+
   it("requestSync touches the sync-now file", () => {
     requestSync(dir);
     expect(readdirSync(queue())).toEqual([SYNC_NOW_FILE]);
@@ -112,6 +128,15 @@ describe("files", () => {
       { op: "update", task: "t1", fields: { title: "oat milk", due: null } },
       { op: "complete", task: "t1" },
     ]);
+  });
+});
+
+describe("updateTask on a failed task", () => {
+  it("sends every field, so a save retries the failed edit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gtasks-"));
+    const failed = task("t1", { title: "x", notes: "n", due: null, state: "failed" });
+    expect(updateTask(failed, { title: "x", notes: "n", due: null }, dir)).toBe(true);
+    expect(readOps(dir)[0].op).toEqual({ op: "update", task: "t1", fields: { title: "x", notes: "n", due: null } });
   });
 });
 
