@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from gtasks_sync.api import NotFound, Task, TasksApi, insert_body, patch_body, task_fields
+from gtasks_sync.api import Task, TasksApi, insert_body, patch_body, task_fields
 from gtasks_sync.errors import OpFailed
 from gtasks_sync.queue import InvalidOp, Op, failed_dir, list_op_files, move_to_failed, parse_op
 from gtasks_sync.state import State
@@ -61,6 +61,10 @@ def apply_op(api: TasksApi, state: State, op: Op, now: datetime) -> None:
 
     task_id = state.resolve(op.task)
     if task_id is None:
+        if op.kind == "delete":
+            # Its create failed, so the task never reached Google. This applied delete
+            # also removes the failed create (done_files), so a failed capture can be dismissed.
+            return
         raise UnmappedLocalId(op.task)
     result: Task | None = None
     try:
