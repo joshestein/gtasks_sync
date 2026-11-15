@@ -154,6 +154,8 @@ class HttpTasksApi:
             if page_token:
                 page_params["pageToken"] = page_token
             page = self.call("GET", params=page_params)
+            if not isinstance(page, dict):
+                raise Transient("empty list response")
             tasks.extend(page.get("items", []))
             page_token = page.get("nextPageToken")
             if not page_token:
