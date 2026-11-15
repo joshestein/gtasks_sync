@@ -73,7 +73,9 @@ describe("files", () => {
     writeFileSync(join(queue(), "accepted", "5000-aaaaaaaa.json"), JSON.stringify({ op: "delete", task: "t1" }));
     writeOp({ op: "delete", task: "t2" }, dir, 1000); // The clock stepped back.
     writeOp({ op: "delete", task: "t3" }, dir, 1000);
-    const names = readdirSync(queue()).filter((n) => OP_FILE.test(n)).sort();
+    const names = readdirSync(queue())
+      .filter((n) => OP_FILE.test(n))
+      .sort();
     expect(names.map((n) => Number(n.split("-")[0]))).toEqual([5001, 5002]);
   });
 
@@ -103,9 +105,15 @@ describe("files", () => {
     );
     mkdirSync(join(queue(), "accepted"), { recursive: true });
     mkdirSync(join(queue(), "failed"));
-    writeFileSync(join(queue(), "accepted", "1-aa.json"), JSON.stringify({ op: "update", task: "t1", fields: { title: "a" } }));
+    writeFileSync(
+      join(queue(), "accepted", "1-aa.json"),
+      JSON.stringify({ op: "update", task: "t1", fields: { title: "a" } }),
+    );
     writeFileSync(join(queue(), "2-bb.json"), JSON.stringify({ op: "update", task: "t1", fields: { notes: "b" } }));
-    writeFileSync(join(queue(), "failed", "0-cc.json"), JSON.stringify({ op: "create", task: LOCAL, title: "x", notes: "", due: null }));
+    writeFileSync(
+      join(queue(), "failed", "0-cc.json"),
+      JSON.stringify({ op: "create", task: LOCAL, title: "x", notes: "", due: null }),
+    );
     const { tasks, status } = loadTasks(dir);
     expect(status?.error).toBeNull();
     const t = byId(tasks);
@@ -159,14 +167,21 @@ describe("overlay", () => {
   it("matches ops by task id or local id", () => {
     const tasks = overlay(
       [cached("t1", { local_id: LOCAL })],
-      [queued({ op: "update", task: LOCAL, fields: { title: "a" } }), queued({ op: "update", task: "t1", fields: { notes: "b" } })],
+      [
+        queued({ op: "update", task: LOCAL, fields: { title: "a" } }),
+        queued({ op: "update", task: "t1", fields: { notes: "b" } }),
+      ],
       [],
     );
     expect(tasks[0]).toMatchObject({ title: "a", notes: "b", state: "pending" });
   });
 
   it("an update changes only its fields", () => {
-    const [task] = overlay([cached("t1", { notes: "keep", due: "2026-11-20" })], [queued({ op: "update", task: "t1", fields: { due: null } })], []);
+    const [task] = overlay(
+      [cached("t1", { notes: "keep", due: "2026-11-20" })],
+      [queued({ op: "update", task: "t1", fields: { due: null } })],
+      [],
+    );
     expect(task).toMatchObject({ notes: "keep", due: null });
   });
 
@@ -183,7 +198,11 @@ describe("overlay", () => {
   });
 
   it("delete hides the task and its subtasks", () => {
-    const tasks = overlay([cached("p"), cached("c", { parent: "p" }), cached("other")], [queued({ op: "delete", task: "p" })], []);
+    const tasks = overlay(
+      [cached("p"), cached("c", { parent: "p" }), cached("other")],
+      [queued({ op: "delete", task: "p" })],
+      [],
+    );
     expect(tasks.map((t) => t.id)).toEqual(["other"]);
   });
 

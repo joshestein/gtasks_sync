@@ -25,8 +25,7 @@ export function isOverdue(task: Task, today = localDate()): boolean {
 const byPosition = (a: Task, b: Task) => a.position.localeCompare(b.position);
 
 /** Due date first (no due date last), then Google's order. */
-const byDueThenPosition = (a: Task, b: Task) =>
-  (a.due ?? "9999").localeCompare(b.due ?? "9999") || byPosition(a, b);
+const byDueThenPosition = (a: Task, b: Task) => (a.due ?? "9999").localeCompare(b.due ?? "9999") || byPosition(a, b);
 
 /** Newest completion first. */
 const byCompletedDesc = (a: Task, b: Task) => (b.completed ?? "").localeCompare(a.completed ?? "");

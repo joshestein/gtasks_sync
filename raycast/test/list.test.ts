@@ -56,7 +56,11 @@ describe("arrange", () => {
   });
 
   it("sorts completed tasks newest first, with subtasks after their parent", () => {
-    const done = (completed: string, fields: Partial<Task> = {}) => ({ status: "completed" as const, completed, ...fields });
+    const done = (completed: string, fields: Partial<Task> = {}) => ({
+      status: "completed" as const,
+      completed,
+      ...fields,
+    });
     const { completed } = arrange([
       task("old", done("2026-11-10T00:00:00.000Z")),
       task("new", done("2026-11-14T00:00:00.000Z")),
@@ -66,7 +70,10 @@ describe("arrange", () => {
   });
 
   it("search matches every word in title or notes, ignoring case, and shows a matching subtask alone", () => {
-    const tasks = [task("p", { title: "Groceries" }), task("c", { title: "Oat Milk", parent: "p", notes: "the barista one" })];
+    const tasks = [
+      task("p", { title: "Groceries" }),
+      task("c", { title: "Oat Milk", parent: "p", notes: "the barista one" }),
+    ];
     const { open } = arrange(tasks, "milk BARISTA");
     expect(ids(open)).toEqual(["c"]);
     expect(open[0].parentTitle).toBe("Groceries");
