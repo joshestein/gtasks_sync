@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
 
-from gtasks_sync.cache import SyncError, Status, read_cached_tasks, serialize_tasks, write_cache
+import pytest
+
+from gtasks_sync.cache import SyncError, Status, read_cache, serialize_tasks, write_cache
 from gtasks_sync.state import State
 
 from .conftest import LOCAL_ID, NOW
@@ -20,7 +22,7 @@ def test_serializes_tasks_with_local_ids(state: State) -> None:
         },
         {"id": "t2", "title": "sub", "parent": "t1", "status": "completed", "completed": "2026-11-15T09:00:00.000Z"},
     ]
-    state.map(LOCAL_ID, "t1", NOW)
+    state.map(LOCAL_ID, "t1")
 
     [first, second] = serialize_tasks(tasks, state)
 
@@ -46,13 +48,21 @@ def test_write_then_read(tmp_path: Path) -> None:
     data = json.loads(path.read_text())
     assert data["synced_at"] == "2026-11-15T09:00:00.000Z"
     assert data["error"] == {"kind": "auth", "message": "revoked"}
-    assert read_cached_tasks(path) == [{"id": "t1"}]
+    status = Status(synced_at=NOW, last_attempt_at=NOW, error=SyncError("auth", "revoked"))
+    assert read_cache(path) == ([{"id": "t1"}], status)
 
 
-def test_read_bad_cache_gives_no_tasks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("content", [None, "{", "[]", '{"version": 99, "tasks": [{}]}'])
+def test_read_unusable_cache_gives_nothing(tmp_path: Path, content: str | None) -> None:
     path = tmp_path / "cache.json"
-    assert read_cached_tasks(path) == []
-    path.write_text('{"version": 99, "tasks": [{}]}')
-    assert read_cached_tasks(path) == []
+    if content is not None:
+        path.write_text(content)
+    assert read_cache(path) == ([], None)
+
+
+def test_a_bad_field_never_loses_the_tasks(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text('{"version": 1, "synced_at": "bad", "last_attempt_at": "2026-11-15T09:00:00.000Z", "error": 3, "tasks": [{"id": "t1"}]}')
+    assert read_cache(path) == ([{"id": "t1"}], Status(synced_at=None, last_attempt_at=NOW, error=None))
     path.write_text('{"version": 1, "tasks": {}}')
-    assert read_cached_tasks(path) == []
+    assert read_cache(path) == ([], None)

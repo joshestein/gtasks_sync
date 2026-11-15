@@ -3,9 +3,9 @@ from typing import Any
 
 import pytest
 
-from gtasks_sync.queue import InvalidOp, Op, failed_dir, list_op_files, move_to_failed, parse_op, remove_ops
+from gtasks_sync.queue import InvalidOp, Op, Queue, list_op_files, parse_op
 
-from .conftest import LOCAL_ID, WriteOp
+from .conftest import LOCAL_ID, OTHER_LOCAL_ID, WriteOp, accepted
 
 
 def test_lists_in_name_order_and_skips_other_files(queue_dir: Path, write_op: WriteOp) -> None:
@@ -14,7 +14,7 @@ def test_lists_in_name_order_and_skips_other_files(queue_dir: Path, write_op: Wr
     (queue_dir / ".1700000000005-ffff0000.json.tmp").write_text("{}")
     (queue_dir / ".hidden.json").write_text("{}")
     (queue_dir / "tasks.json").write_text("{}")
-    failed_dir(queue_dir).mkdir()
+    (queue_dir / "failed").mkdir()
     assert list_op_files(queue_dir) == [first, second]
 
 
@@ -69,10 +69,42 @@ def test_rejects_invalid(write_op: WriteOp, op: str, task: str, raw: str | None,
         parse_op(write_op(op, task=task, raw=raw, **fields))
 
 
-def test_move_to_failed_and_remove(queue_dir: Path, write_op: WriteOp) -> None:
+def test_pending_moves_unreadable_files_to_failed(queue: Queue, write_op: WriteOp) -> None:
     bad = write_op("create", raw="{")
     good = write_op("delete")
-    move_to_failed(bad)
-    assert (failed_dir(queue_dir) / bad.name).exists()
-    remove_ops([good, good])
-    assert list_op_files(queue_dir) == []
+    assert [(p, op.kind) for p, op in queue.pending()] == [(good, "delete")]
+    assert list_op_files(queue.failed_dir) == [queue.failed_dir / bad.name]
+
+
+def test_accept_and_fail_move_the_file(queue: Queue, write_op: WriteOp) -> None:
+    first = write_op("delete")
+    second = write_op("delete")
+    queue.accept(first)
+    queue.fail(second)
+    assert list_op_files(queue.dir) == []
+    assert list_op_files(queue.accepted_dir) == [accepted(first)]
+    assert list_op_files(queue.failed_dir) == [queue.failed_dir / second.name]
+
+
+def same(task: str) -> str:
+    return task
+
+
+def test_finish_removes_accepted_ops_and_older_failed_ops_for_the_same_task(queue: Queue, write_op: WriteOp) -> None:
+    old_failed = write_op("update", task=LOCAL_ID, fields={"title": "x"})
+    other_failed = write_op("update", task=OTHER_LOCAL_ID, fields={"title": "x"})
+    unreadable_failed = write_op("delete", raw="{")
+    for path in (old_failed, other_failed, unreadable_failed):
+        queue.fail(path)
+    done = write_op("delete")
+    queue.accept(done)
+    newer_failed = write_op("update", task=LOCAL_ID, fields={"title": "y"})
+    queue.fail(newer_failed)
+
+    removed = queue.finish(same)
+
+    assert removed == [accepted(done), queue.failed_dir / old_failed.name]
+    assert list_op_files(queue.accepted_dir) == []
+    assert [p.name for p in list_op_files(queue.failed_dir)] == sorted(
+        [other_failed.name, unreadable_failed.name, newer_failed.name]
+    )

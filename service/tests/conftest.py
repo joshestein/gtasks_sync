@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from gtasks_sync.api import Task, Transient, iso
+from gtasks_sync.queue import Queue
 from gtasks_sync.state import State
 
 LOCAL_ID = "local:1763198043000-3f9a0c1e"
@@ -32,13 +33,14 @@ class FakeApi:
     def add(self, **fields: Any) -> Task:
         task_id = f"t{next(self._ids)}"
         task: Task = {"id": task_id, "status": "needsAction", "updated": iso(NOW), **fields}
+        if task["status"] == "completed":
+            task.setdefault("completed", iso(NOW))
         self.tasks[task_id] = task
         return task
 
     def _check(self, method: str) -> None:
         if method in self.fail:
             raise self.fail.pop(method)
-
 
     def _children(self, task_id: str) -> list[Task]:
         return [t for t in self.tasks.values() if t.get("parent") == task_id]
@@ -60,8 +62,10 @@ class FakeApi:
             return
         task.update(body)  # As the real API: a deleted task takes the patch and stays deleted.
         if body.get("status") == "completed":  # As the real API.
-            for child in self._children(task_id):
-                child["status"] = "completed"
+            for t in [task, *self._children(task_id)]:
+                t.update(status="completed", completed=iso(NOW))
+        elif body.get("status") == "needsAction":
+            task.pop("completed", None)
 
     def delete(self, task_id: str) -> None:
         self._check("delete")
@@ -78,6 +82,16 @@ class FakeApi:
     def call_names(self) -> list[str]:
         return [c[0] for c in self.calls]
 
+    def list_open(self) -> list[Task]:
+        self._check("list_open")
+        self.calls.append(("list_open",))
+        return [t for t in self.live() if t["status"] == "needsAction"]
+
+    def list_completed_since(self, since: datetime) -> list[Task]:
+        self._check("list_completed_since")
+        self.calls.append(("list_completed_since", since))
+        return [t for t in self.live() if t["status"] == "completed" and datetime.fromisoformat(t["completed"]) >= since]
+
     def live(self) -> list[Task]:
         return [t for t in self.tasks.values() if not t.get("deleted")]
 
@@ -92,6 +106,16 @@ def queue_dir(tmp_path: Path) -> Path:
     d = tmp_path / "queue"
     d.mkdir()
     return d
+
+
+@pytest.fixture
+def queue(queue_dir: Path) -> Queue:
+    return Queue(queue_dir)
+
+
+def accepted(path: Path) -> Path:
+    """Where an op file goes once Google accepts it."""
+    return path.parent / "accepted" / path.name
 
 
 @pytest.fixture

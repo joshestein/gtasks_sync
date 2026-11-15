@@ -7,18 +7,20 @@ import pytest
 
 from gtasks_sync.api import AuthError, BadRequest, Transient, iso
 from gtasks_sync.apply import ADOPT_SLACK, apply_queue
-from gtasks_sync.queue import failed_dir, list_op_files
-from gtasks_sync.state import Mapped, State, load_state
+from gtasks_sync.queue import Queue, list_op_files
+from gtasks_sync.state import State, load_state
 
-from .conftest import LOCAL_ID, NOW, OTHER_LOCAL_ID, FakeApi, WriteOp
+from .conftest import LOCAL_ID, NOW, OTHER_LOCAL_ID, FakeApi, WriteOp, accepted
 
 Run = Callable[..., list[Path]]
 
 
 @pytest.fixture
-def run(api: FakeApi, state: State, queue_dir: Path) -> Run:
+def run(api: FakeApi, state: State, queue: Queue) -> Run:
     def run() -> list[Path]:
-        return apply_queue(api, state, queue_dir, NOW)
+        """Apply, then finish as after a cache write. Return the removed files."""
+        apply_queue(api, state, queue, NOW)
+        return queue.finish(state.task_key)
 
     return run
 
@@ -31,7 +33,7 @@ def replay_create(state: State, write_op: WriteOp) -> None:
 
 
 def failed_names(queue_dir: Path) -> list[str]:
-    return [p.name for p in list_op_files(failed_dir(queue_dir))]
+    return [p.name for p in list_op_files(queue_dir / "failed")]
 
 
 # create
@@ -39,7 +41,7 @@ def failed_names(queue_dir: Path) -> list[str]:
 
 def test_create_inserts_and_maps(api: FakeApi, state: State, state_path: Path, write_op: WriteOp, run: Run) -> None:
     path = write_op("create", title="milk", notes="oat", due="2026-11-20")
-    assert run() == [path]
+    assert run() == [accepted(path)]
     [task] = api.live()
     assert (task["title"], task["notes"], task["due"]) == ("milk", "oat", "2026-11-20T00:00:00.000Z")
     assert state.resolve(LOCAL_ID) == task["id"]
@@ -54,7 +56,7 @@ def test_create_leaves_out_empty_notes_and_due(api: FakeApi, write_op: WriteOp, 
 
 
 def test_create_already_mapped_is_skipped(api: FakeApi, state: State, write_op: WriteOp, run: Run) -> None:
-    state.map(LOCAL_ID, "t9", NOW)
+    state.map(LOCAL_ID, "t9")
     write_op("create", title="milk")
     run()
     assert api.calls == []
@@ -69,7 +71,7 @@ def test_lost_insert_response_is_adopted_not_duplicated(
         run()
     assert load_state(state_path).insert_attempts == {LOCAL_ID: NOW}
 
-    assert run() == [path]
+    assert run() == [accepted(path)]
 
     [task] = api.live()
     assert state.resolve(LOCAL_ID) == task["id"]
@@ -93,7 +95,7 @@ def test_adopt_skips_mapped_deleted_and_different_tasks(api: FakeApi, state: Sta
     api.add(title="milk", notes="different")
     api.add(title="milk", due="2026-11-21T00:00:00.000Z")
     target = api.add(title="milk")
-    state.map(OTHER_LOCAL_ID, mapped["id"], NOW)
+    state.map(OTHER_LOCAL_ID, mapped["id"])
     run()
     assert state.resolve(LOCAL_ID) == target["id"]
     assert "insert" not in api.call_names()
@@ -177,7 +179,7 @@ def test_op_on_task_deleted_elsewhere_is_skipped(
 ) -> None:
     task = api.add(title="milk", deleted=True)
     path = write_op(kind, task=task["id"], **fields)
-    assert run() == [path]
+    assert run() == [accepted(path)]
     assert failed_names(queue_dir) == []
 
 
@@ -187,7 +189,7 @@ def test_op_on_missing_task_is_skipped(
 ) -> None:
     """404: the task is gone for good."""
     path = write_op(kind, task="gone", **fields)
-    assert run() == [path]
+    assert run() == [accepted(path)]
     assert failed_names(queue_dir) == []
 
 
@@ -219,7 +221,7 @@ def test_delete_dismisses_a_failed_capture(api: FakeApi, write_op: WriteOp, queu
     assert failed_names(queue_dir) == [create.name]
 
     delete = write_op("delete")
-    assert run() == [delete, failed_dir(queue_dir) / create.name]
+    assert run() == [accepted(delete), queue_dir / "failed" / create.name]
     assert api.calls == []
 
 
@@ -233,8 +235,8 @@ def test_bad_file_and_bad_request_fail_and_do_not_block(
     good = write_op("delete", task=task["id"])
 
     # The delete applied, so the older failed update for the same task goes with it.
-    assert run() == [good, failed_dir(queue_dir) / bad_request.name]
-    assert failed_names(queue_dir) == [bad_file.name, bad_request.name]
+    assert run() == [accepted(good), queue_dir / "failed" / bad_request.name]
+    assert failed_names(queue_dir) == [bad_file.name]
     assert api.live() == []
 
 
@@ -250,11 +252,11 @@ def test_transient_or_auth_error_stops_the_round_and_keeps_later_ops(
 
     with pytest.raises(type(error)):
         run()
-    assert set(state.applied) == {first.name, second.name}
-    assert list_op_files(queue_dir) == [first, second, third]
+    assert list_op_files(queue_dir) == [third]
+    assert list_op_files(queue_dir / "accepted") == [accepted(first), accepted(second)]
 
     api.calls.clear()
-    assert run() == [first, second, third]
+    assert run() == [accepted(first), accepted(second), accepted(third)]
     assert api.calls == [("delete", task["id"])]
 
 
@@ -269,17 +271,16 @@ def test_unexpected_error_stops_the_round_and_keeps_the_op(
         run()
     assert list_op_files(queue_dir) == [path]
     assert failed_names(queue_dir) == []
-    assert state.applied == {}
 
 
-def test_applied_ops_are_not_sent_again(api: FakeApi, state_path: Path, queue_dir: Path, write_op: WriteOp, run: Run) -> None:
-    """Crash after the ops applied, before their files were removed."""
+def test_accepted_ops_are_not_sent_again(api: FakeApi, state: State, queue: Queue, write_op: WriteOp) -> None:
+    """The round failed after the op applied: it waits in accepted/ for the next good round."""
     task = api.add(title="milk")
     write_op("update", task=task["id"], fields={"title": "a"})
-    run()
+    apply_queue(api, state, queue, NOW)
     api.calls.clear()
 
-    apply_queue(api, load_state(state_path), queue_dir, NOW)
+    apply_queue(api, state, queue, NOW)
 
     assert api.calls == []
 
@@ -288,7 +289,7 @@ def test_later_applied_op_removes_older_failed_op_for_same_task(
     api: FakeApi, state: State, write_op: WriteOp, queue_dir: Path, run: Run
 ) -> None:
     task = api.add(title="milk")
-    state.map(LOCAL_ID, task["id"], NOW)
+    state.map(LOCAL_ID, task["id"])
     api.fail["patch"] = BadRequest("400")
     write_op("update", task=LOCAL_ID, fields={"title": "x"})
     other = api.add(title="other")
@@ -300,16 +301,26 @@ def test_later_applied_op_removes_older_failed_op_for_same_task(
     later = write_op("complete", task=task["id"])
     done = run()
 
-    assert done == [later, failed_dir(queue_dir) / mine_failed_name]
+    assert done == [accepted(later), queue_dir / "failed" / mine_failed_name]
     assert other_failed.name in failed_names(queue_dir)
 
 
-def test_state_has_the_map_entry_before_the_op_is_marked_applied(
-    api: FakeApi, state_path: Path, write_op: WriteOp, run: Run
+def test_the_map_entry_is_saved_before_the_create_is_accepted(
+    api: FakeApi, state: State, state_path: Path, queue: Queue, write_op: WriteOp
 ) -> None:
     path = write_op("create", title="milk")
-    run()
-    saved = load_state(state_path)
-    task_id = api.live()[0]["id"]
-    assert saved.applied == {path.name: task_id}
-    assert saved.id_map == {LOCAL_ID: Mapped(task_id, NOW)}
+    apply_queue(api, state, queue, NOW)
+    assert accepted(path).exists()
+    assert load_state(state_path).id_map == {LOCAL_ID: api.live()[0]["id"]}
+
+
+def test_a_failed_create_drops_its_insert_mark(
+    api: FakeApi, state: State, state_path: Path, queue: Queue, write_op: WriteOp
+) -> None:
+    state.insert_attempts[LOCAL_ID] = NOW
+    api.add(title="milk")
+    api.add(title="milk")  # Two matches: no adopt, so it inserts.
+    api.fail["insert"] = BadRequest("400")
+    write_op("create", title="milk")
+    apply_queue(api, state, queue, NOW)
+    assert load_state(state_path).insert_attempts == {}
