@@ -16,7 +16,7 @@ BASE_URL = "https://tasks.googleapis.com/tasks/v1/lists/@default/tasks"
 TIMEOUT = 30
 PAGE_SIZE = 100
 # 403 reasons that mean "slow down", not "no access".
-_RATE_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"}
+_RATE_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded", "limitExceeded"}
 
 
 class ApiError(Exception):
