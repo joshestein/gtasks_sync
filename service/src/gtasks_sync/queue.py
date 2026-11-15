@@ -4,12 +4,14 @@ import json
 import logging
 import os
 import re
+import secrets
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
+from gtasks_sync.atomic import write_json_atomic
 from gtasks_sync.errors import OpFailed
 
 log = logging.getLogger(__name__)
@@ -43,6 +45,27 @@ def is_local_id(task: str) -> bool:
 def list_op_files(queue_dir: Path) -> list[Path]:
     """Op files in apply order. Skips temp files and other files."""
     return sorted(p for p in queue_dir.glob("*.json") if OP_FILE_RE.fullmatch(p.name))
+
+
+def mint_local_id(now_ms: int) -> str:
+    """A local id (ADR 0001). Same as mintLocalId in raycast/src/lib/store.ts."""
+    return f"local:{now_ms}-{secrets.token_hex(4)}"
+
+
+def write_op(queue_dir: Path, op: Mapping[str, Any], now_ms: int) -> Path:
+    """Write one op file, atomically. Same as writeOp in raycast/src/lib/store.ts.
+
+    The time in the name is after every op on the Mac, so a clock step back cannot reorder ops.
+    """
+    stages = [queue_dir, queue_dir / "accepted", queue_dir / "failed"]
+    times = [_name_ms(p) for d in stages for p in list_op_files(d)]
+    path = queue_dir / f"{max([now_ms, *(t + 1 for t in times)])}-{secrets.token_hex(4)}.json"
+    write_json_atomic(path, op)
+    return path
+
+
+def _name_ms(path: Path) -> int:
+    return int(path.name.split("-")[0])
 
 
 def _check_title(value: Any) -> str:
@@ -185,4 +208,4 @@ def _is_stale(
 
 def _op_time(path: Path) -> datetime:
     """When the Mac wrote the op, from its file name."""
-    return datetime.fromtimestamp(int(path.name.split("-")[0]) / 1000, UTC)
+    return datetime.fromtimestamp(_name_ms(path) / 1000, UTC)
