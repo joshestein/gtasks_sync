@@ -130,7 +130,7 @@ class HttpTasksApi:
             response = self._session.request(method, url, params=params, json=body, timeout=TIMEOUT)
         except auth_errors.RefreshError as e:
             raise (Transient if e.retryable else AuthError)(f"token refresh: {e}") from e
-        except (requests.ConnectionError, requests.Timeout, auth_errors.TransportError, auth_errors.TimeoutError) as e:
+        except (requests.RequestException, auth_errors.TransportError, auth_errors.TimeoutError) as e:
             raise Transient(f"{type(e).__name__}: {e}") from e
         if response.status_code >= 300:
             raise _error(response)
